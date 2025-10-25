@@ -219,6 +219,23 @@ Class类封装一个对象和接口运行时的状态，当装载类时，Class�
 
 
 
+**java反射(Reflection)：**允许程序在运行时查询、访问和修改类、接口、字段和方法的信息。反射提供了一种动态地操作类的能力，这在很多框架和库中被广泛使用，例如Spring框架的依赖注入
+
+反射API：
+
+- `java.lang.Class`：表示类的对象。提供了方法来获取类的字段、方法、构造函数等。
+- `java.lang.reflect.Field`：表示类的字段（属性）。提供了访问和修改字段的能力。
+- `java.lang.reflect.Method`：表示类的方法。提供了调用方法的能力。
+- `java.lang.reflect.Constructor`：表示类的构造函数。提供了创建对象的能力。
+
+工作流程：
+
+1. 获取 `Class` 对象**先获取目标类的 `Class` 对象。
+2. 获取成员信息：通过 `Class` 对象，可以获取类的字段、方法、构造函数等信息。
+3. 操作成员：通过反射 API 可以读取和修改字段的值、调用方法以及创建对象。
+
+
+
 - Class类也是类的一种
 - Class类的对象内容是你创建的类的类型信息，比如你创建一个shapes类，那么，Java会生成一个内容是shapes的Class类的对象
 - Class类的对象不能像普通类一样，以 new shapes() 的方式创建，它的对象只能由JVM创建，因为这个类没有public构造函数
@@ -263,7 +280,7 @@ static void showClassInfo(Object obj) {
     cls.getDeclaredMethods();	// 获取对象公有的方法getMethods()
 
     try{
-        Method method = cls.getMethod("hello", String.class, int.class);
+        Method method = cls.getMethod("hello", String.class, int.class);	// int.class ≠ Integer.class
         // 通过反射动态执行方法
         method.invoke(obj, "张三", 1);
     } catch (NoSuchMethodException e) {
