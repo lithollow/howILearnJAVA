@@ -48,10 +48,11 @@ Throwable
 try{
 	// 可能出现异常的代码
 }Catch(Exception e){
-	// TODO: 处理异常，若catch没有命中则跳过
+	// TODO: 处理异常，若catch没有捕获到则不执行此块
 }finally{
 	// finally块总是执行
 	// close()关闭连接、资源释放等
+	// 避免在finally中返回，会覆盖try中的返回值
 }
 ```
 
@@ -61,11 +62,14 @@ try{
 	obj.toString();
 }Catch(NullPointerException e){
 	// 若要针对不同异常做不同处理，则不用Exception
+	// 避免空 catch 块，至少记录异常
+	System.out.println("空指针异常: " + e.getMessage());
 }catch (ClassCastException | IllegalArgumentException e) {
 	// 多重捕获(java 7+)
     System.out.println("捕获异常: " + e.getClass().getSimpleName());
 }Catch(Exception e){
-	// 多个catch块
+	// 具体异常优先，最后处理通用异常
+	logger.error("异常", e);
 }...
 ```
 
@@ -73,7 +77,7 @@ try{
 
 ##### 2. try-with-resources (Java 7+)
 
-**传统资源管理**使用 try-catch-finally 结构，最终在 `finally{}` 显式调用 `close()`
+**传统资源管理：**使用 try-catch-finally 结构，最终在 `finally{}` 显式调用 `close()`
 
 ```
 FileOutputStream fos = null;
@@ -110,7 +114,7 @@ try(FileOutputStream fos1 = new FileOutputStream("d:/output.txt");
 
 ##### 3. throws
 
-- 主动抛出异常。并没有处理，而是异常处理责任**传递给调用者**
+- 主动抛出异常。并没有处理，而是把异常处理责任**传递给调用者**
   - `throw`语句可以在方法体内的任何地方使用，但一旦执行到`throw`语句，方法会**立即终止**，并将异常抛给调用者
 
 - 抛出**非受检异常(`RuntimeException`)**的方法不需要声明该类异常(~~`throws RuntimeException`~~)
@@ -135,7 +139,7 @@ static void methodB() throws IOException,SQLException{
     int i = 1;
     if(i == 0) { throw new IOException();}
     if(i == 1) { throw new SQLException();}
-    else { throw new NullPointerException();}
+    else { throw new NullPointerException();}	// 空指针异常是非受检异常，无需声明
 }
 --------------------------------------------------------
 public static void methodC() throws IOException {
@@ -155,4 +159,15 @@ public static void main(String[] args) {
 ```
 
 
+
+---
+
+
+
+## 三、自定义异常
+
+Java提供的异常都有特定的含义，开发中有更具体更实际的异常(service层throw，controller层catch)  
+
+- 非受检异常 `extends RuntimeException` 
+- 受检异常 `extends Exception` 
 
