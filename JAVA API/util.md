@@ -178,7 +178,7 @@ System.out.println("Random UUID: " + uuidString);
 
 ##### 4.1.1.2 Set
 
-**调用`equals()`判断是否重复**，因此实际开发时如果希望筛掉重复值则需要重写equals方法
+**`HashSet`和`LinkedHashSet`调用`equals()`判断是否重复**，因此实际开发时如果希望筛掉重复值则需要重写equals方法
 
 ```
 Set set = new HashSet();
@@ -199,20 +199,113 @@ set.forEach(System.out::println);	// forEach + lambda 表达式
 1. HashSet
    - HashSet底层是HashMap
    - 可以存放null值，但是只能有一个null
-   - HashSet不保证元素是有序的，取决于hash后，再确定索引的结果（即，不保证存放元素的顺序和取出顺序一致）
-   - **不重复，无序**
+   - HashSet**无序**（不保证元素是有序的，取决于hash后，再确定索引的结果（即，不保证存放元素的顺序和取出顺序一致）
+   - **不重复**
 2. LinkedHashSet
    - LinkedHashSet是HashSet的子类;
    - LinkedHashSet底层是一个LinkedHashMap,底层维护了一个数组+双向链表+红黑树;
-   - LinkedHashSet根据元素的hashcode值来决定元素的存储位置,同时使用链表维护元素的次序（图）,是元素看起来以插入顺序保存;
-   - LinkedHashSet**不允许添加重复元素，有序（元素插入的顺序）**
+   - LinkedHashSet**有序**（根据元素的hashcode值来决定元素的存储位置,同时使用链表维护元素的次序（图）,是元素看起来以插入顺序保存;
+   - LinkedHashSet**不允许添加重复元素**
 3. TreeSet
-   - **排序（按自然顺序排序），不重复**
+   - **排序，不重复（通过比较机制去重**
    - TreeSet 底层维护的是一个 TreeMap
+
+```
+// 存入TreeSet的元素要实现排序：要么实现Comparable接口，要么在实例TreeSet的时候传入Comparator
+// 匿名内部类
+Set<Person> set = new TreeSet<>(new Comparator<Person>() {
+	@Override
+	public int compare(Person p1, Person p2) {
+		return Integer.compare(p1.getId(), p2.getId());
+	}
+});
+// Lambda表达式
+Set<Person> set = new TreeSet<>((p1, p2) -> Integer.compare(p1.getId(), p2.getId()));
+//(p1, p2) -> p1.getId() - p2.getId()存在整数溢出的风险
+Set<Person> set = new TreeSet<>(Comparator.comparingInt(p -> p.getId()));
+//方法引用
+Set<Person> set = new TreeSet<>(Comparator.comparingInt(Person::getId));
+```
 
 
 
 #### 4.1.2 Map 双列集合：存放键值对
+
+- **无序**
+- **key不可重复**
+
+1. HashMap
+
+   - 底层维护了Node类型的数组table，默认为null
+
+   - 当创建对象时，将加载因子（loadfactor）初始化为0.75
+
+   - 当添加key-val时，通过key的哈希值得到在table的索引。然后判断该索引处是否有元素，如果没有元素直接添加。如果该索引处有元素，判断该元素的key和准备加入的key是否相等。如果相等，则直接替换val，如果不相等需要判断是树结构还是链表结构从而做出相应处理。如果添加时发现容量不够，则需要扩容。
+
+   - 第1添加，则需要扩容table容量为16，临界值（threshold）为12（16*0.75）
+
+   - 以后再扩容，则需要扩容table容量为原来的2倍（32），临界值为原来的2倍，即24。依此类推
+
+   - 在Java8中，如果一条链表的元素个数超过TREEIFY_THRESHOLD（默认是8），并且table的大小 >= MIN_TREEIFY_CAPACITY（默认64），就会进行树化（红黑树）
+
+   ```
+   Map<Integer, String> map = new HashMap<>();
+   map.put(9001,"张三");
+   map.put(9002,"李四");
+   map.put(9003,"张三");
+   map.put(9004,"王五");
+   map.put(9004,"名字"); // 替换
+   
+   // 返回键集合 set 
+   Set<Integer> keys = map.keySet();
+   keys.forEach(System.out::println);
+   // 返回值集合 Collection
+   Collection<String> values = map.values();
+   values.forEach(System.out::println);
+   // 返回键值对象※※※
+   Set<Map.Entry<Integer, String>> entrys = map.entrySet();
+   entrys.forEach(entry->System.out.printf("%d:%s\n",entry.getKey(),entry.getValue()));
+   ```
+
+2. LinkedHashMap
+
+​	有序 不重复 参考 LinkedHashSet
+
+3. TreeMap
+
+   - 排序
+
+   - 不重复
+
+   - 底层：红黑树
+
+4. HashTable
+
+   - 存放的元素是键值对：即 K-V
+
+   - Hashtable的**键和值都不能为null**，否则会抛出NullPointerException（HashMap允许为空
+
+   - Hashtable 使用方法基本上和HashMap一样
+
+   - Hashtable 是线程安全的（synchronized），HashMap是线程不安全的
+
+5. Properties
+
+   - Properties类继承自Hashtable类并且实现了Map接口，也是使用键值对的形式来保存数据（以字符串形式存储键值对
+
+   - 它的使用特点和Hashtable类似
+
+   - Properties 更多用于 从xxx.properties文件中，加载数据到Properties类对象，并进行读取和修改【说明：xxx.properties文件通常作为配置文件】
+
+```
+String getProperty(String key)：用指定的键在此属性列表中搜索属性。
+String getProperty(String key, String defaultValue)：用指定的键在属性列表中搜索属性，如果未找到，则返回默认值。
+void setProperty(String key, String value)：设置属性，调用Hashtable的put方法，但要求键和值都是字符串。
+void load(InputStream inStream)：从输入流中读取属性列表。
+void store(OutputStream out, String comments)：将属性列表写入输出流，并带上注释。
+void loadFromXML(InputStream in)：从XML输入流中读取属性。
+void storeToXML(OutputStream os, String comment)：将属性写入XML输出流。
+```
 
 
 
@@ -241,11 +334,9 @@ Box<String> stringBox = new Box<>();
 stringBox.set("Hello");
 // ---------------------------------------------
 // 方法
-public class GenericMethodTest {
-    public static <T> void printArray(T[] inputArray) {
-        for (T element : inputArray) {
-            System.out.println(element);
-        }
+public static <T> void printArray(T[] inputArray) {
+    for (T element : inputArray) {
+        System.out.println(element);
     }
 }
 // 使用
