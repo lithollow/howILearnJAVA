@@ -155,7 +155,7 @@ String是引用行数据类型，本身并不存储字符串，String类型的�
 
 String的底层有一个Value数组，用于存储字符串，也就是说虽然Java定义了字符串类型，但本质是还是用数组进行存储字符串的
 
-在JDK1.8中，String的底层Value数组是char类型的，但是在JDk17中，Sting的底层Value数组是byte类型的。但两者并没有太大的区别，字符本质上就是数字，可以理解为String类当中的任何方法，都是对value数组进行操作的
+在JDK1.8中，String的底层Value数组是char类型的，但是在JDK17中，Sting的底层Value数组是byte类型的。但两者并没有太大的区别，字符本质上就是数字，可以理解为String类当中的任何方法，都是对value数组进行操作的
 
 ```
 使用常量串构造：
@@ -181,10 +181,38 @@ String s = new String(ch);
 
 ```
 String a = "abc";
-String b = new String("abc");
+String a1 = "abc";	// a和a1指向同一个常量池中的对象
+String b = new String("abc");	// 创建两个对象：一个在堆中（new创建），一个在常量池中（如果常量池中没有"abc"）
+// b指向堆中的对象
+String c = b.intern;	// 使用intern方法，此时，c将指向常量池中的"abc"。
 System.out.println(a == b);	// false
 System.out.println(a.equals(b));	// true
 ```
+
+字符串的 **`intern`** 方法：
+
+String类的 intern 方法是一个本地方法，它的作用是：如果字符串常量池中已经包含一个等于此String对象的字符串（用`equals`方法确定），则返回常量池中的字符串引用；否则，将此String对象包含的字符串添加到常量池中，并返回此String对象的引用。
+
+
+
+**字符常量池**：
+
+在Java 7之前，字符串常量池位于方法区（永久代）中。
+
+从Java 7开始，字符串常量池被移到了堆中。
+
+- 字符串常量池中不会存储重复的字符串。
+
+- 使用new String()创建的字符串对象不会自动放入常量池，除非调用intern方法。
+
+- 字符串拼接：
+
+  ```
+  String s1 = "Hel" + "lo"; // 在编译时就会优化为"Hello"，因此会从常量池中取。
+  String s2 = "Hel";
+  String s3 = s2 + "lo"; // 运行时拼接，会生成新的字符串对象，不会在常量池中（除非调用intern）。
+  // 但是，如果s2是final的，那么情况会不同，因为final在编译时就能确定，所以会被优化。
+  ```
 
 
 
