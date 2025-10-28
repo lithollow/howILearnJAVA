@@ -106,6 +106,7 @@ try(FileOutputStream fos1 = new FileOutputStream("d:/output.txt");
 	FileOutputStream fos2 = new FileOutputStream("d:/output.txt")){
 	// TODO 向文件输出内容
 }catch(Exception e){
+	// 如果方法声明了Exception，可以省略catch
     System.out.println("捕获异常: " + e.getMessage());
 }
 ```
