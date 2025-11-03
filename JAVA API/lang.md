@@ -258,7 +258,7 @@ Class类封装一个对象和接口运行时的状态，当装载类时，Class�
 
 工作流程：
 
-1. 获取 `Class` 对象**先获取目标类的 `Class` 对象。
+1. 获取 `Class` 对象先获取目标类的 `Class` 对象。
 2. 获取成员信息：通过 `Class` 对象，可以获取类的字段、方法、构造函数等信息。
 3. 操作成员：通过反射 API 可以读取和修改字段的值、调用方法以及创建对象。
 
@@ -335,5 +335,97 @@ static void showClassInfo(Object obj) {
 *	定义的属性: []
 *	你好 a张三   1
 */
+```
+
+```
+class Person {
+    private String name;
+    private int age;
+
+    public Person() {}
+    public Person(String name, int age) {
+        this.name = name;
+        this.age = age;
+    }
+
+    public String getName() { return name;}
+    public void setName(String name) { this.name = name;}
+
+    public int getAge() { return age;}
+    public void setAge(int age) { this.age = age;}
+
+    private void privateMethod() {
+        System.out.println("私有方法");
+    }
+}
+
+public class ReflectionDemo {
+    public static void main(String[] args) throws ClassNotFoundException, NoSuchMethodException,
+            IllegalAccessException, InvocationTargetException, InstantiationException, NoSuchFieldException {
+        // 获取 Person 类的 Class 对象
+        Class<?> clazz = Class.forName("com.github.paicoding.forum.test.javabetter.importance.Person");
+
+        // 获取并打印类名
+        System.out.println("类名: " + clazz.getName());
+
+        // 获取构造函数
+        Constructor<?> constructor = clazz.getConstructor(String.class, int.class);
+
+        // 使用构造函数创建 Person 对象实例
+        Object instance = constructor.newInstance("沉默王二", 30);
+
+        // 获取并调用 getName 方法
+        Method getNameMethod = clazz.getMethod("getName");
+        String name = (String) getNameMethod.invoke(instance);
+        System.out.println("名字: " + name);
+
+        // 获取并调用 setAge 方法
+        Method setAgeMethod = clazz.getMethod("setAge", int.class);
+        setAgeMethod.invoke(instance, 35);
+
+        // 获取并访问 age 字段
+        Field ageField = clazz.getDeclaredField("age");
+        ageField.setAccessible(true);
+        int age = ageField.getInt(instance);
+        System.out.println("年纪: " + age);
+
+        // 获取并调用私有方法
+        Method privateMethod = clazz.getDeclaredMethod("privateMethod");
+        privateMethod.setAccessible(true);
+        privateMethod.invoke(instance);
+    }
+}
+```
+
+
+
+---
+
+
+
+## 七、System
+
+`System.out.printf`格式化输出
+
+| 格式符 | 说明         | 示例           |
+| :----- | :----------- | :------------- |
+| `%s`   | 字符串       | `"Hello"`      |
+| `%d`   | 十进制整数   | `123`          |
+| `%f`   | 浮点数       | `3.14`         |
+| `%c`   | 字符         | `'A'`          |
+| `%b`   | 布尔值       | `true`/`false` |
+| `%x`   | 十六进制整数 | `ff`           |
+| `%o`   | 八进制整数   | `77`           |
+| `%e`   | 科学计数法   | `1.23e+02`     |
+| `%%`   | 百分号本身   | `%`            |
+
+指定宽度和精度：
+%10s: 最小宽度10个字符的字符串，右对齐
+%-10s: 最小宽度10个字符的字符串，左对齐
+%.2f: 保留两位小数的浮点数
+%10.2f: 最小宽度10个字符，保留两位小数的浮点数
+
+```
+System.out.printf("姓名: %s, 年龄: %d, 工资: %.2f%n", name, age, salary);
 ```
 

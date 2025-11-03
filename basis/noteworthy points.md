@@ -168,6 +168,59 @@ class Test {
 2、被声明为 final
 3、在声明时初始化
 4、初始化表达式是常量表达式
+```
 
+```
+public class Demo {
+
+    public static void main(String[] args) {
+        Zi zi = new Zi();
+    }
+
+    static class Fu {
+        int a = 10;
+
+        public void printA() {
+            System.out.println("Fu PrintA:" + a);
+        }
+
+        public Fu() {
+            printA();
+        }
+    }
+
+    static class Zi extends Fu {
+        int a = 20;
+
+        @Override
+        public void printA() {
+            System.out.println("Zi PrintA:" + a);
+        }
+
+        public Zi() {
+            printA();
+        }
+    }
+}
+程序运行的大致顺序是：
+● 初始化Fu的int a
+● 调用Fu的构造方法，执行printA()
+● 调用Zi的printA()：打印 zi.a = 0（因为zi的a还没初始化，默认0）
+● 初始化Zi的int a
+● 调用Zi的构造方法，执行printA()
+● 调用Zi的printA()：打印zi.a = 20
+
+● 类加载
+  ○ 先加载父类
+    ■ 初始化static修饰的字段
+  ○ 后加载子类
+    ■ 初始化static修饰的字段
+● 对象初始化
+  ○ 先初始化父“对象”
+    ■ 初始化父“对象”普通字段
+    ■ 调用父“对象”构造器
+  ○ 再初始化子对象
+    ■ 初始化子对象普通字段
+    ■ 调用子对象构造器
 ```
 

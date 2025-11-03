@@ -75,6 +75,9 @@ Arrays.asList(fObjs).forEach(f->System.out.printf(
 
 在操作流的时候，无论使用什么样的流对象，**底层传输的始终为二进制数据(1,0)**
 
+- 资源流：构造函数的参数是资源对象（文件）
+- 处理流：构造函数的参数是另一个流对象
+
 
 
 基类流：
@@ -127,6 +130,51 @@ try(FileInputStream fis = new FileInputStream("d:/output.txt");
         // 将buffer中从第0个字节到第count个字节的数据通过fos写出
         fos.write(buffer, 0, count);
     }
+}
+```
+
+  
+
+---
+
+
+
+## 三、Serializable
+
+#### 3.1 序列化
+
+将数据结构或对象状态转换成可以存储或传输的格式，以便可以在不同的系统或环境中进行交换
+
+序列化的数据：
+
+- 对象的类型的信息 ( 该类必须实现`java.io.Serializable`接口 )
+  - `Serializable`接口是一个标记接口，其中没有方法
+
+- 对象中数据的类型：没有用`transient`和`static`修饰的 所有属性 都得Serializable
+
+  
+
+**`static`**和**`transient`**的区别：
+
+- `transient`：修饰成员变量，指示在序列化时忽略该变量
+- `static`：被static修饰的变量（即类变量）不会被序列化：static变量是类级别的，类变量的值在JVM中是全局的，与特定的序列化实例无关；反序列化一个对象时，被static修饰的变量会保持其在JVM中的当前值，而不是从序列化数据中恢复。这是因为静态变量是全局的，不受单个对象实例的序列化/反序列化过程影响
+
+```
+List<Person> persons = new ArrayList<>();
+persons.add(new Person("qw"));
+persons.add(new Person("er"));
+persons.add(new Person("ty"));
+persons.forEach(System.out::println);
+// 写
+try(FileOutputStream fos = new FileOutputStream("persons.bat");
+        ObjectOutputStream oos = new ObjectOutputStream(fos)){
+    oos.writeObject(persons);
+}
+// 读
+try(FileInputStream fis = new FileInputStream("persons.bat");
+        ObjectInputStream ois = new ObjectInputStream(fis)){
+    List<Person> readList = (List<Person>) ois.readObject();
+    readList.forEach(System.out::println);
 }
 ```
 
