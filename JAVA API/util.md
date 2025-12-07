@@ -269,7 +269,7 @@ Set<Person> set = new TreeSet<>(Comparator.comparingInt(Person::getId));
 
 2. LinkedHashMap
 
-​	有序 不重复 参考 LinkedHashSet
+​	**有序** 不重复 参考 LinkedHashSet
 
 3. TreeMap
 

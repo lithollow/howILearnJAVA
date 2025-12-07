@@ -73,6 +73,24 @@ try{
 }...
 ```
 
+**异常传播机制**：在 Java 中，异常会沿着调用栈向上传播。如果内层 `try` 块没有 `catch`，异常会传递给外层的 `catch` 块处理。
+
+```
+try (Connection conn = ...) {          // 外层：负责连接异常
+    try (PreparedStatement pstmt = ...) {  // 中层：负责语句异常
+        try (ResultSet rs = ...) {         // 内层：负责结果集异常
+            // 业务逻辑
+        }
+        // rs 自动关闭，异常会向上传播
+    }
+    // pstmt 自动关闭，异常会向上传播
+}
+// conn 自动关闭
+catch (SQLException e) {               // 统一捕获所有 SQL 异常
+    e.printStackTrace();
+}
+```
+
 
 
 ##### 2. try-with-resources (Java 7+)
@@ -80,26 +98,31 @@ try{
 **传统资源管理：**使用 try-catch-finally 结构，最终在 `finally{}` 显式调用 `close()`
 
 ```
+资源变量（这里的 fos）必须在 try 块之外声明，这扩大了它的作用域，不够优雅，也可能导致误用
 FileOutputStream fos = null;
-try{
+try {
 	fos = new FileOutputStream("d:/output.txt");
 	// TODO 向文件输出内容
-}catch(FileNotFoundException e){
+} catch (FileNotFoundException e) {
 	System.out.println("文件没找到: " + e.getMessage());
-}finally{
-	try{
+} finally {
+	try {
 		fos.close();
-	}catch(IOException e){
+	} catch (IOException e) {
 		System.out.println("文件关闭错误: " + e.getMessage());
+		// 异常压制：如果在 `try` 块中抛出了一个异常（我们称之为**主异常**），紧接着在 `finally` 块的 `close()` 方法中也抛出了一个异常（**关闭异常**）。那么，最终抛给调用者的将是 `finally` 块中的关闭异常，而 `try` 块中的主异常就丢失了。这给调试带来了极大的困难
 	}
 }
 ```
+
+
 
 **try-with-resources 方式：**
 
 - 自动调用`close()`方法，关闭 `try()` 内定义的所有资源对象
   - 先 1 再 2 顺序创建，先 2 再 1 逆序关闭
 - 只有实现了 `AutoCloseable` 接口的类的对象才能被当成资源，在 `try()` 里创建对象，最后关闭
+- **无论是否发生异常，资源都会被自动关闭**
 
 ```
 try(FileOutputStream fos1 = new FileOutputStream("d:/output.txt");
@@ -108,6 +131,36 @@ try(FileOutputStream fos1 = new FileOutputStream("d:/output.txt");
 }catch(Exception e){
 	// 如果方法声明了Exception，可以省略catch
     System.out.println("捕获异常: " + e.getMessage());
+}
+```
+
+- 使用try-with-resources语句时，如果自动关闭资源（例如连接）失败，会抛出异常。但是，如果try块中也抛出了异常，那么关闭资源时抛出的异常会被抑制（suppressed），即附加到主异常（try块中抛出的异常）上
+
+```
+try (Connection conn = getConnection()) {
+    // 使用连接进行操作，可能会抛出异常
+    // ...
+} catch (Exception e) {
+    // e是try块中抛出的异常（如果有）
+    // 检查被抑制的异常，即关闭连接时可能抛出的异常
+    Throwable[] suppressed = e.getSuppressed();
+    for (Throwable t : suppressed) {
+        // 处理关闭连接时抛出的异常，例如记录日志或重新抛出
+        // 这里选择将关闭连接异常作为主异常抛出，但通常我们更关心业务异常，所以可以根据需要处理
+        // 例如，如果关闭连接异常很重要，可以将其抛出
+        if (t instanceof ConnectionCloseException) {
+            throw (ConnectionCloseException) t;
+        }
+    }
+    // 如果没有重新抛出关闭连接异常，则抛出主异常
+    throw e;
+}
+
+// 自定义的关闭连接异常
+class ConnectionCloseException extends Exception {
+    public ConnectionCloseException(String message) {
+        super(message);
+    }
 }
 ```
 
