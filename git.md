@@ -19,3 +19,55 @@
 7. 解除本地和远程的绑定**`git remote rm origin`**
 
    查看远程库信息: **`git remote -v`**
+
+
+
+## 二、稀疏检出 (Git Sparse Checkout)
+
+只需要使用远程仓库的某些目录，可以只检出仓库的特定部分，避免拉取不需要的文件
+
+1. 克隆仓库但不检出文件
+
+​	`git clone --no-checkout <远程仓库URL> <本地目录>`
+
+​	`cd <本地目录>`
+
+2. 启用稀疏检出
+
+​	`git config core.sparseCheckout true`
+
+3. 设置要检出的文件夹（例如只检出src目录）
+
+​	`echo "src/" >> .git/info/sparse-checkout`
+
+4. 检出指定分支
+
+​	`git checkout <分支名>`
+
+5. 如果之后需要添加更多文件夹
+
+​	`echo "docs/" >> .git/info/sparse-checkout`
+
+​	`git checkout`
+
+
+
+临时禁用稀疏检出：
+
+```
+# 暂时获取所有文件
+git config core.sparseCheckout false
+git checkout main
+# 操作完成后重新启用
+git config core.sparseCheckout true
+git checkout main
+```
+
+查看稀疏检出设置：
+
+```
+# 检查是否启用了稀疏检出
+git config core.sparseCheckout
+# 查看当前稀疏检出规则
+cat .git/info/sparse-checkout
+```
