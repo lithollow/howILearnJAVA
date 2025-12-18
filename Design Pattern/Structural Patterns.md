@@ -532,7 +532,7 @@ public class AProxy implements A {
     public void a() {
         // this.a.a();
         // 可以添加额外的处理
-        // 比如权限检查
+        // 比如权限检查：↓↓↓
         if (getCurrentUser().isRoot()) {
             this.a.a();
         } else {
