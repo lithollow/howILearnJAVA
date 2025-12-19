@@ -704,3 +704,801 @@ public class BService {
 // 有了@xxxAnnotation，再配合xxxAspect，任何Bean，只要方法标注了@xxxAnnotation，就可以自动实现xxxx
 ```
 
+
+
+---
+
+
+
+# database
+
+Spring对数据库访问的简化：
+
+- 提供了简化的访问JDBC的模板类，不必手动释放资源
+- 提供了一个统一的DAO类以实现Data Access Object模式
+- 把`SQLException`封装为`DataAccessException`，这个异常是一个`RuntimeException`，并且让我们能区分SQL异常的原因，例如，`DuplicateKeyException`表示违反了一个唯一约束
+- 能方便地集成Hibernate、JPA和MyBatis这些数据库访问框架
+
+
+
+## JDBC
+
+过去的Java程序使用JDBC接口访问关系数据库：
+
+- 创建全局`DataSource`实例，表示数据库连接池
+- 在需要读写数据库的方法内部，按如下步骤访问数据库：
+  - 从全局`DataSource`实例获取`Connection`实例
+  - 通过`Connection`实例创建`PreparedStatement`实例
+  - 执行SQL语句，如果是查询，则通过`ResultSet`读取结果集，如果是修改，则获得`int`结果
+
+关键是 释放资源 和 事务处理
+
+
+
+在Spring使用JDBC
+
+```java
+@Configuration
+@ComponentScan
+@PropertySource("jdbc.properties")
+public class JDBCConfig {
+    @Value("${jdbc.url}")
+    String jdbcUrl;
+    @Value("${jdbc.username}")
+    String jdbcUsername;
+    @Value("${jdbc.password}")
+    String jdbcPassword;
+
+    @Bean
+    DataSource createDataSource() {
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl(jdbcUrl);
+        config.setUsername(jdbcUsername);
+        config.setPassword(jdbcPassword);
+        config.addDataSourceProperty("autoCommit", "true");
+        config.addDataSourceProperty("connectionTimeout", "5");
+        config.addDataSourceProperty("idleTimeout", "60");
+        return new HikariDataSource(config);
+    }
+
+    @Bean
+    JdbcTemplate createJdbcTemplate(@Autowired DataSource dataSource) {
+        return new JdbcTemplate(dataSource);
+    }
+}
+// 通过HSQLDB自带的工具来初始化数据库表，这里写一个Bean，在Spring容器启动时自动创建一个users表
+@Component
+public class DatabaseInitializer {
+    @Autowired
+    JdbcTemplate jdbcTemplate;
+
+    @PostConstruct
+    public void init() {
+        jdbcTemplate.update("CREATE TABLE IF NOT EXISTS users (" //
+                + "id BIGINT IDENTITY NOT NULL PRIMARY KEY, " //
+                + "email VARCHAR(100) NOT NULL, " //
+                + "password VARCHAR(100) NOT NULL, " //
+                + "username VARCHAR(100) NOT NULL, " //
+                + "UNIQUE (email))");
+    }
+}
+// 使用：只需要在需要访问数据库的Bean中，注入JdbcTemplate即可
+@EnableAspectJAutoProxy
+public class AppTest extends TestCase {
+	@Test
+    public void testJDBC() {
+        ApplicationContext context = new AnnotationConfigApplicationContext(JDBCConfig.class);
+        JDBCService a = context.getBean(JDBCService.class);
+        a.addUser("zhangsan","123456", "666");
+        a.addUser("lisi","123456", "777");
+
+        System.out.println(a.getUserByEmail("777"));
+    }
+}
+```
+
+Spring提供的`**JdbcTemplate**`采用**Template模式**，提供了一系列以**回调**为特点的工具方法，目的是避免繁琐的`try...catch`语句
+
+用法：
+
+- 针对简单查询，优选`query()`和`queryForObject()`，因为只需提供SQL语句、参数和`RowMapper`
+
+  - 对于查询，主要通过`RowMapper`实现了JDBC结果集到Java对象的转换
+
+  - ```java
+    public User getUserByEmail(String email) {
+        // 传入SQL，参数和RowMapper实例:
+        return jdbcTemplate.queryForObject("SELECT * FROM users WHERE email = ?",
+                (ResultSet rs, int rowNum) -> {
+                    // 将ResultSet的当前行映射为一个JavaBean:
+                    return new User( // new User object:
+                            rs.getLong("id"), // id
+                            rs.getString("email"), // email
+                            rs.getString("password"), // password
+                            rs.getString("name")); // name
+                },
+                email);
+    }
+    // 返回多行记录
+    public List<User> getUsers(int pageIndex) {
+        int limit = 100;
+        int offset = limit * (pageIndex - 1);
+        // 数据库表的结构恰好和JavaBean的属性名称一致，Spring提供的BeanPropertyRowMapper直接把一行记录按列名转换为JavaBean
+        return jdbcTemplate.query("SELECT * FROM users LIMIT ? OFFSET ?",
+                new BeanPropertyRowMapper<>(User.class),
+                limit, offset);
+    }
+    ```
+
+- 针对更新操作，优选`update()`，因为只需提供SQL语句和参数
+
+  - ```java
+    public void updateUser(User user) {
+        // 传入SQL，SQL参数，返回更新的行数:
+        if (1 != jdbcTemplate.update("UPDATE users SET name = ? WHERE id = ?", user.getName(), user.getId())) {
+            throw new RuntimeException("User not found by id");
+        }
+    }
+    // 某一列是自增列，这时我们需要获取插入后的自增值：使用 JdbcTemplate 提供的 KeyHolder
+    public User register(String email, String password, String name) {
+        // 创建一个KeyHolder:
+        KeyHolder holder = new GeneratedKeyHolder();
+        if (1 != jdbcTemplate.update(
+            // 参数1:PreparedStatementCreator
+            (conn) -> {
+                // 创建PreparedStatement时，必须指定RETURN_GENERATED_KEYS:
+                var ps = conn.prepareStatement("INSERT INTO users(email, password, name) VALUES(?, ?, ?)",
+                        Statement.RETURN_GENERATED_KEYS);
+                ps.setObject(1, email);
+                ps.setObject(2, password);
+                ps.setObject(3, name);
+                return ps;
+            },
+            // 参数2:KeyHolder
+            holder)
+        ) {
+            throw new RuntimeException("Insert failed.");
+        }
+        // 从KeyHolder中获取返回的自增值:
+        return new User(holder.getKey().longValue(), email, password, name);
+    }
+    ```
+
+- 任何复杂的操作，最终也可以通过`execute(ConnectionCallback)`实现，因为拿到`Connection`就可以做任何JDBC操作
+
+  - ```java
+    // T execute(ConnectionCallback<T> action)
+    public User getUserById(long id) {
+        // 注意传入的是ConnectionCallback:
+        return jdbcTemplate.execute((Connection conn) -> {
+            // 可以直接使用conn实例，不要释放它，回调结束后JdbcTemplate自动释放:
+            // 在内部手动创建的PreparedStatement、ResultSet必须用try(...)释放:
+            try (var ps = conn.prepareStatement("SELECT * FROM users WHERE id = ?")) {
+                ps.setObject(1, id);
+                try (var rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return new User( // new User object:
+                                rs.getLong("id"), // id
+                                rs.getString("email"), // email
+                                rs.getString("password"), // password
+                                rs.getString("name")); // name
+                    }
+                    throw new RuntimeException("user not found by id.");
+                }
+            }
+        });
+    }
+    ```
+
+    
+
+---
+
+
+
+## 声明式事务
+
+在Spring中操作事务，没必要手写JDBC事务，可以使用Spring提供的高级接口来操作事务
+
+Spring提供的事务管理器：`PlatformTransactionManager`，负责管理所有事务
+而事务用`TransactionStatus`表示
+
+
+
+```java
+// 手写事务
+TransactionStatus tx = null;
+try {
+    // 开启事务:
+    tx = txManager.getTransaction(new DefaultTransactionDefinition());
+    // 相关JDBC操作:
+    jdbcTemplate.update("...");
+    jdbcTemplate.update("...");
+    // 提交事务:
+    txManager.commit(tx);
+} catch (RuntimeException e) {
+    // 回滚事务:
+    txManager.rollback(tx);
+    throw e;
+}
+```
+
+之所以抽象出`PlatformTransactionManager`和`TransactionStatus`，是因为JavaEE除了提供JDBC事务外，它还支持分布式事务JTA（Java Transaction API）
+	分布式事务是指多个数据源（比如多个数据库，多个消息系统）要在分布式环境下实现事务的时候，应该怎么实现
+
+Spring为了同时支持JDBC和JTA两种事务模型，就抽象出`PlatformTransactionManager`
+
+```java
+// 这里只需要JDBC事务
+@Configuration
+@ComponentScan
+@EnableTransactionManagement // 启用声明式事务，避免繁琐编程
+@PropertySource("jdbc.properties")
+public class AppConfig {
+    ...
+    // 定义一个PlatformTransactionManager对应的Bean
+    @Bean
+    PlatformTransactionManager createTxManager(@Autowired DataSource dataSource) {
+        return new DataSourceTransactionManager(dataSource);
+    }
+    
+}
+// 然后，对需要事务支持的方法，加一个@Transactional注解
+@Component
+public class UserService {
+    // 此public方法自动具有事务支持:
+    @Transactional
+    public User register(String email, String password, String name) {
+       ...
+    }
+}
+// 或者直接在Bean的class处注解@Transactional，表示所有public方法都具有事务支持
+```
+
+
+
+Spring对一个声明式事务的方法，通过AOP代理，即通过自动创建Bean的Proxy实现事务支持
+
+```java
+public class UserService$$EnhancerBySpringCGLIB extends UserService {
+    UserService target = ...
+    PlatformTransactionManager txManager = ...
+
+    public User register(String email, String password, String name) {
+        TransactionStatus tx = null;
+        try {
+            tx = txManager.getTransaction(new DefaultTransactionDefinition());
+            target.register(email, password, name);
+            txManager.commit(tx);
+        } catch (RuntimeException e) {
+            txManager.rollback(tx);
+            throw e;
+        }
+    }
+    ...
+}
+```
+
+
+
+**回滚事务**
+
+默认：在一个事务方法中，如果程序判断需要回滚事务，只需抛出`RuntimeException`
+
+```java
+@Transactional
+public buyProducts(long productId, int num) {
+    ...
+    if (store < num) {
+        // 库存不够，购买失败:
+        throw new IllegalArgumentException("No enough products");
+    }
+    ...
+}
+```
+
+针对Checked Exception回滚事务：在`@Transactional`注解中写出来
+
+```java
+// 抛出RuntimeException或IOException时，事务将回滚
+@Transactional(rollbackFor = {RuntimeException.class, IOException.class})
+public buyProducts(long productId, int num) throws IOException { ...}
+```
+
+
+
+**事务边界**
+
+```java
+@Component
+public class UserService {
+    @Transactional
+    public User register(String email, String password, String name) { // 事务开始
+       ...
+    } // 事务结束
+}
+```
+
+现实中的事务边界往往更加复杂
+
+
+
+**事务传播**
+
+现有某功能入口AController，其中调用BService的某事务方法bMethod，在bMethod内部又调用了CService的事务方法cMethod
+
+1. bMethod 和 cMethod 都由 `@Transactional` 注解
+
+2. 我们希望 BService.bMethod 和 CService.cMethod 在一个事务中进行
+
+
+
+Spring的声明式事务为事务传播定义了几个级别，默认传播级别就是REQUIRED，它的意思是，如果当前没有事务，就创建一个新事务，如果当前有事务，就加入到当前事务中执行
+
+- BService.bMethod 在 AController 中进行，因为 AController 没有事务，因此 BService.bMethod 自动创建一个事务
+- BService.bMethod 方法内部调用 CService.cMethod 时，cMethod 检测到当前已有事务，直接加入到当前事务中执行
+
+- 整个业务流程的事务边界：只有一个事务：BService.bMethod
+
+
+
+其他传播级别：
+
+1. `SUPPORTS`：表示如果有事务，就加入到当前事务，如果没有，那也不开启事务执行。这种传播级别可用于查询方法，因为SELECT语句既可以在事务内执行，也可以不需要事务
+2. `MANDATORY`：表示必须要存在当前事务并加入执行，否则将抛出异常。这种传播级别可用于核心更新逻辑，比如用户余额变更，它总是被其他事务方法调用，不能直接由非事务方法调用
+3. `REQUIRES_NEW`：表示不管当前有没有事务，都必须开启一个新的事务执行。如果当前已经有事务，那么当前事务会挂起，等新事务完成后，再恢复执行
+4. `NOT_SUPPORTED`：表示不支持事务，如果当前有事务，那么当前事务会挂起，等这个方法执行完成后，再恢复执行
+5. `NEVER`：和`NOT_SUPPORTED`相比，它不但不支持事务，而且在监测到当前有事务时，会抛出异常拒绝执行
+6. `NESTED`：表示如果当前有事务，则开启一个嵌套级别事务，如果当前没有事务，则开启一个新事务
+
+定义事务的传播级别也是写在注解里 `@Transactional(propagation = Propagation.REQUIRES_NEW)`
+
+
+
+Spring 事务传播的实现：**`ThreadLocal`**
+
+Spring总是把JDBC相关的`Connection`和`TransactionStatus`实例绑定到`ThreadLocal`
+	如果一个事务方法从`ThreadLocal`未取到事务，那么它会打开一个新的JDBC连接，同时开启一个新的事务，否则，它就直接使用从`ThreadLocal`获取的JDBC连接以及`TransactionStatus`
+
+因此，事务能正确传播的前提是，方法调用是在一个线程内
+	即事务只能在当前线程传播，无法跨线程传播
+
+
+
+---
+
+
+
+## DAO
+
+Spring提供了一个`JdbcDaoSupport`类，用于简化DAO的实现
+
+```java
+public abstract class JdbcDaoSupport extends DaoSupport {
+	// 核心：持有一个JdbcTemplate
+    private JdbcTemplate jdbcTemplate;
+
+    public final void setJdbcTemplate(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+        initTemplateConfig();
+    }
+    public final JdbcTemplate getJdbcTemplate() { return this.jdbcTemplate;}
+    ...
+}
+// 因为 JdbcDaoSupport 的 jdbcTemplate 没有自动注入，所以子类需要注入一个到 JdbcDaoSupport 
+public abstract class AbstractDao<T> extends JdbcDaoSupport {
+    private String table;
+    private Class<T> entityClass;
+    private RowMapper<T> rowMapper;
+
+    public AbstractDao() {
+        // 获取当前类型的泛型类型:
+        this.entityClass = getParameterizedType();
+        this.table = this.entityClass.getSimpleName().toLowerCase() + "s";
+        this.rowMapper = new BeanPropertyRowMapper<>(entityClass);
+    }
+
+    public T getById(long id) {
+        return getJdbcTemplate().queryForObject("SELECT * FROM " + table + " WHERE id = ?", this.rowMapper, id);
+    }
+
+    public List<T> getAll(int pageIndex) {
+        int limit = 100;
+        int offset = limit * (pageIndex - 1);
+        return getJdbcTemplate().query("SELECT * FROM " + table + " LIMIT ? OFFSET ?",
+                new Object[] { limit, offset },
+                this.rowMapper);
+    }
+
+    public void deleteById(long id) {
+        getJdbcTemplate().update("DELETE FROM " + table + " WHERE id = ?", id);
+    }
+    ...
+}
+@Component
+@Transactional
+public class UserDao extends AbstractDao<User> {
+    // 已经有了:
+    // User getById(long)
+    // List<User> getAll(int)
+    // void deleteById(long)
+}
+```
+
+
+
+---
+
+
+
+## Hibernate
+
+`JdbcTemplate`的方法`List<T> query(String, RowMapper, Object...)`
+	使用`RowMapper`把`ResultSet`的一行记录映射为Java Bean
+
+这种把关系数据库的表记录映射为Java对象的过程就是**ORM**：Object-Relational Mapping
+	ORM既可以把记录转换成Java对象，也可以把Java对象转换为行记录
+	ORM框架使用**Proxy模式**，跟踪Java Bean的修改，便在`update()`操作中更新必要的属性
+
+ORM框架通常提供了缓存
+	一级缓存是指在一个Session范围内的缓存，常见的情景是根据主键查询时，两次查询可以返回同一实例
+	二级缓存是指跨Session的缓存，一般默认关闭，需要手动配置，它增加了数据的不一致性
+
+使用`JdbcTemplate`配合`RowMapper`可以看作是最原始的ORM
+	要实现更自动化的ORM，可以使用熟的ORM框架，例如[Hibernate](https://hibernate.org/)
+
+
+
+```java
+@Configuration
+@ComponentScan
+@EnableTransactionManagement
+@PropertySource("jdbc.properties")
+public class AppConfig {
+    @Bean
+    DataSource createDataSource() {
+        ...
+    }
+    // 启用Hibernate 必须的Bean
+    // 这是一个FactoryBean 会再自动创建一个SessionFactory
+    // Hibernate中，Session是封装了一个JDBC Connection的实例
+    // SessionFactory是封装了JDBC DataSource的实例，即SessionFactory持有连接池
+    // 每次需要操作数据库的时候，SessionFactory创建一个新的Session，相当于从连接池获取到一个新的Connection
+    @Bean
+    LocalSessionFactoryBean createSessionFactory(@Autowired DataSource dataSource) {
+        // 首先用Properties持有Hibernate初始化SessionFactory时用到的所有设置
+        var props = new Properties();
+        props.setProperty("hibernate.hbm2ddl.auto", "update"); // 自动创建数据库的表结构 生产环境勿用
+        props.setProperty("hibernate.dialect", "org.hibernate.dialect.HSQLDialect");	// 使用HSQLDB数据库
+        props.setProperty("hibernate.show_sql", "true");	// 让Hibernate打印执行的SQL 便于调试
+        var sessionFactoryBean = new LocalSessionFactoryBean();
+        sessionFactoryBean.setDataSource(dataSource);
+        // 扫描指定的package获取所有entity class，自动找出能映射为数据库表记录的JavaBean
+        sessionFactoryBean.setPackagesToScan("com.itranswarp.learnjava.entity");
+        sessionFactoryBean.setHibernateProperties(props);
+        return sessionFactoryBean;
+    }
+    // 创建HibernateTransactionManager
+    @Bean
+    PlatformTransactionManager createTxManager(@Autowired SessionFactory sessionFactory) {
+        return new HibernateTransactionManager(sessionFactory);
+    }
+}
+
+// 将数据库表结构映射为Java对象
+@Entity
+@Table(name="users")
+public class User {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(nullable = false, updatable = false)
+    public Long getId() { ... }
+
+    @Column(nullable = false, unique = true, length = 100)
+    public String getEmail() { ... }
+
+    @Column(nullable = false, length = 100)
+    public String getPassword() { ... }
+
+    @Column(nullable = false, length = 100)
+    public String getName() { ... }
+
+    @Column(nullable = false, updatable = false)
+    public Long getCreatedAt() { ... }
+    // “虚拟”的属性。因为getCreatedDateTime()是计算得出的属性，而不是从数据库表读出的值
+    @Transient
+    public ZonedDateTime getCreatedDateTime() {
+        return Instant.ofEpochMilli(this.createdAt).atZone(ZoneId.systemDefault());
+    }
+	// 在我们将一个JavaBean持久化到数据库之前（即执行INSERT语句），Hibernate会先执行该方法
+    @PrePersist
+    public void preInsert() {
+        setCreatedAt(System.currentTimeMillis());
+    }
+}
+```
+
+```java
+// 使用
+@Component
+@Transactional
+public class UserService {
+    @Autowired
+    SessionFactory sessionFactory;
+    
+    // Insert 持久化一个User实例 只需调用persist()
+    public User register(String email, String password, String name) {
+        // 创建一个User对象:
+        User user = new User();
+        // 设置好各个属性:
+        user.setEmail(email);
+        user.setPassword(password);
+        user.setName(name);
+        // 不要设置id，因为使用了自增主键
+        // 保存到数据库:
+        sessionFactory.getCurrentSession().persist(user);
+        // 现在已经自动获得了id:
+        System.out.println(user.getId());
+        return user;
+    }
+    // Delete Hibernate总是用id来删除记录
+    public boolean deleteUser(Long id) {
+        User user = sessionFactory.getCurrentSession().byId(User.class).load(id);
+        if (user != null) {
+            sessionFactory.getCurrentSession().remove(user);
+            return true;
+        }
+        return false;
+    }
+    // Update 先更新User的指定属性，然后调用merge()方法
+    public void updateUser(Long id, String name) {
+        User user = sessionFactory.getCurrentSession().byId(User.class).load(id);
+        user.setName(name);
+        sessionFactory.getCurrentSession().merge(user);
+    }
+    // Select
+    // 1. Hibernate内置的HQL查询：
+    List<User> list = sessionFactory.getCurrentSession()
+        .createQuery("from User u where u.email = ?1 and u.password = ?2", User.class)
+        .setParameter(1, email).setParameter(2, password)
+        .list();
+    // 2. NamedQuery：给查询起个名字，然后保存在注解中
+    @NamedQueries(
+        @NamedQuery(
+            // 查询名称:
+            name = "login",
+            // 查询语句:
+            query = "SELECT u FROM User u WHERE u.email = :e AND u.password = :pwd"
+        )
+    )
+    @Entity
+    public class User extends AbstractEntity {
+        public User login(String email, String password) {
+        List<User> list = sessionFactory.getCurrentSession()
+            .createNamedQuery("login", User.class) // 创建NamedQuery
+            .setParameter("e", email) // 绑定e参数
+            .setParameter("pwd", password) // 绑定pwd参数
+            .list();
+        return list.isEmpty() ? null : list.get(0);
+    }
+}
+```
+
+
+
+---
+
+
+
+## JPA
+
+| JDBC       | Hibernate      | JPA                  |
+| ---------- | -------------- | -------------------- |
+| DataSource | SessionFactory | EntityManagerFactory |
+| Connection | Session        | EntityManager        |
+
+JPA是JavaEE的一个ORM标准，他只是接口，还需要一个实现产品
+
+使用JPA时可以选择Hibernate作为底层实现，或者其他JPA提供方
+
+```java
+@Configuration
+@ComponentScan
+@EnableTransactionManagement
+@PropertySource("jdbc.properties")
+public class AppConfig {
+    @Bean
+    DataSource createDataSource() { ... }
+    
+    @Bean
+    public LocalContainerEntityManagerFactoryBean createEntityManagerFactory(@Autowired DataSource dataSource) {
+        var emFactory = new LocalContainerEntityManagerFactoryBean();
+        // 注入DataSource:
+        emFactory.setDataSource(dataSource);
+        // 扫描指定的package获取所有entity class:
+        emFactory.setPackagesToScan(AbstractEntity.class.getPackageName());
+        // 使用Hibernate作为JPA实现:
+        emFactory.setJpaVendorAdapter(new HibernateJpaVendorAdapter());
+        // 其他配置项:
+        var props = new Properties();
+        props.setProperty("hibernate.hbm2ddl.auto", "update"); // 生产环境不要使用
+        props.setProperty("hibernate.dialect", "org.hibernate.dialect.HSQLDialect");
+        props.setProperty("hibernate.show_sql", "true");
+        emFactory.setJpaProperties(props);
+        return emFactory;
+    }
+    // 实例化一个JpaTransactionManager，以实现声明式事务
+	@Bean
+    PlatformTransactionManager createTxManager(@Autowired EntityManagerFactory entityManagerFactory) {
+        return new JpaTransactionManager(entityManagerFactory);
+    }
+}
+```
+
+Entity Bean的配置和上一节完全相同
+
+```java
+@Component
+@Transactional
+public class UserService {
+    // 此处自动注入代理EntityManagerProxy ，该代理会在必要的时候自动打开EntityManager
+    // 多线程引用的EntityManager虽然是同一个代理类，但该代理类内部针对不同线程会创建不同的EntityManager实例
+    // 标注了@PersistenceContext的EntityManager可以被多线程安全地共享
+    @PersistenceContext
+    EntityManager em;
+    
+    public User getUserById(long id) {
+        User user = this.em.find(User.class, id);
+        if (user == null) {
+            throw new RuntimeException("User not found by id: " + id);
+        }
+        return user;
+    }
+    
+    public User fetchUserByEmail(String email) {
+        // JPQL查询:
+        TypedQuery<User> query = em.createQuery("SELECT u FROM User u WHERE u.email = :e", User.class);
+        query.setParameter("e", email);
+        List<User> list = query.getResultList();
+        if (list.isEmpty()) {
+            return null;
+        }
+        return list.get(0);
+    }
+    
+    // NamedQuery
+    ...
+        
+    // 对数据库进行增删改的操作，可以分别使用persist()、remove()和merge()方法，参数均为Entity Bean本身
+    ...
+}
+```
+
+
+
+---
+
+
+
+## MyBatis
+
+全自动ORM：Hibernate
+
+- 完全的对象关系映射：支持实体类与数据库表的自动映射（注解 / XML 配置），UserProxy保存Hibernate的当前Session
+  - 引入了Attached/Detached状态，表示当前此Java Bean到底是在Session的范围内，还是脱离了Session变成了一个“游离”对象
+- 兼容多种数据库，它使用HQL或JPQL查询，经过一道转换，变成特定数据库的SQL
+- 一级缓存（Session）+ 二级缓存（SessionFactory）：提升查询性能
+- 事务管理：与 Spring 无缝集成，支持声明式事务
+
+
+
+MyBatis：半自动化ORM框架
+
+| JDBC       | Hibernate      | JPA                  | MyBatis           |
+| ---------- | -------------- | -------------------- | ----------------- |
+| DataSource | SessionFactory | EntityManagerFactory | SqlSessionFactory |
+| Connection | Session        | EntityManager        | SqlSession        |
+
+```java
+@Configuration
+@ComponentScan
+@EnableTransactionManagement
+@PropertySource("jdbc.properties")
+public class AppConfig {
+    @Bean
+    DataSource createDataSource() { ... }
+    @Bean
+    SqlSessionFactoryBean createSqlSessionFactoryBean(@Autowired DataSource dataSource) {
+        var sqlSessionFactoryBean = new SqlSessionFactoryBean();
+        sqlSessionFactoryBean.setDataSource(dataSource);
+        return sqlSessionFactoryBean;
+    }
+    // 使用Spring管理的声明式事务
+    @Bean
+    PlatformTransactionManager createTxManager(@Autowired DataSource dataSource) {
+        return new DataSourceTransactionManager(dataSource);
+    }
+}
+```
+
+和Hibernate不同的是，MyBatis使用**Mapper**来实现映射，而且Mapper必须是接口。我们以`User`类为例，在`User`类和`users`表之间映射的`UserMapper`编写如下：
+
+```java
+public interface UserMapper {
+	@Select("SELECT * FROM users WHERE id = #{id}")
+	User getById(@Param("id") long id);
+    
+    @Select("SELECT * FROM users LIMIT #{offset}, #{maxResults}")
+	List<User> getAll(@Param("offset") int offset, @Param("maxResults") int maxResults);
+    // MyBatis执行查询后，将根据方法的返回类型自动把ResultSet的每一行转换为User实例，转换规则当然是按列名和属性名对应
+    // 如果列名和属性名不同，最简单的方式是编写SELECT语句的别名
+    // SELECT id, name, email, created_time AS createdAt FROM users
+    
+    // 插入 半自动化ORM 须写出完整的INSERT语句
+    // @Options: users表的id是自增主键，在SQL中不传入id，但希望获取插入后的主键
+    // keyProperty和keyColumn分别指出JavaBean的属性和数据库的主键列名
+    @Options(useGeneratedKeys = true, keyProperty = "id", keyColumn = "id")
+    @Insert("INSERT INTO users (email, password, name, createdAt) VALUES (#{user.email}, #{user.password}, #{user.name}, #{user.createdAt})")
+	void insert(@Param("user") User user);
+    
+    // 更新 删除
+    @Update("UPDATE users SET name = #{user.name}, createdAt = #{user.createdAt} WHERE id = #{user.id}")
+    void update(@Param("user") User user);
+
+    @Delete("DELETE FROM users WHERE id = #{id}")
+    void deleteById(@Param("id") long id);
+}
+```
+
+MyBatis提供了一个`MapperFactoryBean`来自动创建所有Mapper的实现类
+
+```java
+@MapperScan("com.itranswarp.learnjava.mapper")
+...其他注解...
+public class AppConfig {...}
+```
+
+业务类中直接注入
+
+```java
+@Component
+@Transactional
+public class UserService {
+    // 注入UserMapper:
+    @Autowired
+    UserMapper userMapper;
+
+    public User getUserById(long id) {
+        // 调用Mapper方法:
+        User user = userMapper.getById(id);
+        if (user == null) {
+            throw new RuntimeException("User not found by id.");
+        }
+        return user;
+    }
+}
+```
+
+
+
+ XML配置
+
+上述在Spring中集成MyBatis的方式，我们只需要用到注解，并没有任何XML配置文件。MyBatis也允许使用XML配置映射关系和SQL语句，例如，更新`User`时根据属性值构造动态SQL：
+
+```xml
+<update id="updateUser">
+  UPDATE users SET
+  <set>
+    <if test="user.name != null"> name = #{user.name} </if>
+    <if test="user.hobby != null"> hobby = #{user.hobby} </if>
+    <if test="user.summary != null"> summary = #{user.summary} </if>
+  </set>
+  WHERE id = #{user.id}
+</update>
+```
+
+
+
+编写XML配置的优点是可以组装出动态SQL，并且把所有SQL操作集中在一起。缺点是配置起来太繁琐，调用方法时如果想查看SQL还需要定位到XML配置中。XML配置方式，参考[官方文档](https://mybatis.org/mybatis-3/zh/configuration.html)
+
+使用MyBatis最大的问题是所有SQL都需要全部手写，优点是执行的SQL就是我们自己写的SQL，对SQL进行优化非常简单，也可以编写任意复杂的SQL，或者使用数据库的特定语法，但切换数据库可能就不太容易
