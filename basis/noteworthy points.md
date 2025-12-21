@@ -224,3 +224,92 @@ public class Demo {
     ■ 调用子对象构造器
 ```
 
+---
+
+一个方法中定义的局部变量在运行中被另一个方法使用
+
+```java
+0. 无法通过反射实现：
+Java 的反射机制（java.lang.reflect包）主要用于操作类、字段、方法、构造器等类级别的元数据，无法访问局部变量：
+    局部变量存储在方法的栈帧中（栈内存），而栈帧是线程私有的，且随着方法执行完毕而销毁
+    类的字段（成员变量）存储在堆内存中，属于对象 / 类的元数据，反射可以通过Class对象获取
+
+1. 将局部变量提升为类的成员变量
+    简单，略
+    
+2. 通过方法返回值 / 参数传递
+    略
+    
+3. 使用 ThreadLocal 存储（多线程场景）
+public class LocalVarShare {
+    private static final ThreadLocal<String> THREAD_LOCAL = new ThreadLocal<>();
+
+    public void methodA() {
+        String localVar = "Hello, ThreadLocal!";
+        // 将局部变量存入ThreadLocal
+        THREAD_LOCAL.set(localVar);
+    }
+
+    public void methodB() {
+        // 另一个方法获取ThreadLocal中的值
+        String value = THREAD_LOCAL.get();
+        System.out.println("methodB via ThreadLocal: " + value);
+        // 注意：使用后需移除，避免内存泄漏
+        THREAD_LOCAL.remove();
+    }
+
+    public static void main(String[] args) {
+        LocalVarShare obj = new LocalVarShare();
+        obj.methodA();
+        obj.methodB();
+    }
+}
+
+4. 字节码操作（高级手段，非反射
+通过 ASM、Javassist 等字节码操作框架，可以在运行时修改方法的字节码，将局部变量的值存储到全局位置（如静态变量），从而让另一个方法访问。这种方式并非反射，而是直接操作字节码，复杂度较高。
+import javassist.ClassPool;
+import javassist.CtClass;
+import javassist.CtMethod;
+import javassist.expr.ExprEditor;
+import javassist.expr.FieldAccess;
+import javassist.expr.LocalVariableAccess;
+
+public class LocalVarBytecode {
+    // 用于存储局部变量的静态变量
+    public static String tempVar;
+
+    public void methodA() {
+        String localVar = "Hello, Bytecode!";
+        System.out.println("methodA: " + localVar);
+    }
+
+    public void methodB() {
+        System.out.println("methodB via bytecode: " + tempVar);
+    }
+
+    public static void main(String[] args) throws Exception {
+        // 使用Javassist修改methodA的字节码，将局部变量赋值给tempVar
+        ClassPool pool = ClassPool.getDefault();
+        CtClass ctClass = pool.get("LocalVarBytecode");
+        CtMethod ctMethod = ctClass.getDeclaredMethod("methodA");
+
+        // 拦截局部变量的访问，将值存入静态变量
+        ctMethod.instrument(new ExprEditor() {
+            @Override
+            public void edit(LocalVariableAccess lva) throws Exception {
+                if (lva.getVariableName().equals("localVar")) {
+                    // 在局部变量赋值后，添加代码：tempVar = localVar;
+                    lva.insertAfter("LocalVarBytecode.tempVar = $0;");
+                }
+            }
+        });
+
+        // 加载修改后的类并执行
+        Class<?> clazz = ctClass.toClass();
+        Object obj = clazz.newInstance();
+        clazz.getMethod("methodA").invoke(obj);
+        clazz.getMethod("methodB").invoke(obj);
+    }
+}
+```
+
