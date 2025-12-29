@@ -627,20 +627,15 @@ maven引入Spring对AOP的支持：org.springframework:spring-aspects:6.0.0
 @Aspect
 @Component	// 本身也是一个Bean
 public class loggingAspect {
-    // 在执行BService的每个 public 方法前执行:
-    @Before("execution(public * org.example.service.BService.*(..))")
-    public void doAccessCheck() {
-        System.err.println("[Before] do access check...");
-    }
-
     // 在执行AService的每个方法前后执行:
     @Around("execution(public * org.example.service.AService.*(..))")
-    public Object doLogging(ProceedingJoinPoint pjp) throws Throwable {
+    public Object doAroundA(ProceedingJoinPoint pjp) throws Throwable {
         System.err.println("[Around] start " + pjp.getSignature());
         Object retVal = pjp.proceed();
         System.err.println("[Around] done " + pjp.getSignature());
         return retVal;
     }
+    // @Before After AfterReturning AfterThrowing
 }
 @ComponentScan
 @EnableAspectJAutoProxy	
@@ -667,6 +662,20 @@ public class AppTest extends TestCase {
 - @AfterThrowing：和@After不同的是，只有当目标代码抛出了异常时，才执行拦截器代码
 - @Around：能完全控制目标代码是否执行，并可以在执行前后、抛异常后执行任意拦截代码，可以说是包含了上面所有功能
 
+```java
+	@Around 前
+try {
+    @Before
+    	业务方法
+    @AfterReturning
+} catch (Exception e) {
+    @AfterThrowing
+} finally {
+    @After
+}
+	@Around 后
+```
+
 
 
 #### 注解装配
@@ -684,6 +693,7 @@ public @interface WelcomeAnnotation {
 @Aspect
 @Component
 public class WelcomeAspect {
+    // 直接在Advice上定义Pointcut（最简，适用于单一切入点） 切入点逻辑无法复用
     @Around("@annotation(welcomeAnnotation)")
     public void welcome(ProceedingJoinPoint joinPoint, WelcomeAnnotation welcomeAnnotation) throws Throwable {
         String name = welcomeAnnotation.value();
@@ -691,6 +701,16 @@ public class WelcomeAspect {
         joinPoint.proceed();
         System.err.println("byebye: " + name);
     }
+    
+    // 通过@Pointcut注解定义可复用的切入点（推荐，适用于多Advice复用）
+    @Pointcut("@annotation(com.example.annotation.WelcomeAnnotation)") // 注意：替换为实际的注解全类名
+    public void welcomeAnnotationPointcut() {}
+    @Around("welcomeAnnotationPointcut() && @annotation(welcomeAnnotation)")
+    public Object monitorPerformanceReusable(ProceedingJoinPoint joinPoint, WelcomeAnnotation welcomeAnnotation) throws Throwable {
+        // 逻辑和上面的direct方法一致，此处省略（可直接复用上述逻辑）
+        return monitorPerformanceDirect(joinPoint, welcomeAnnotation);
+    }
+    
 }
 
 @Component
@@ -702,6 +722,58 @@ public class BService {
     }
 }
 // 有了@xxxAnnotation，再配合xxxAspect，任何Bean，只要方法标注了@xxxAnnotation，就可以自动实现xxxx
+```
+
+
+
+#### 启用AOP导致的NPE
+
+```java
+@Component
+public class UserService {
+    public final ZoneId zoneId = ZoneId.systemDefault();
+
+    public UserService() {}
+    public ZoneId getZoneId() { return zoneId;}
+    public final ZoneId getFinalZoneId() { return zoneId;}
+}
+
+@Component
+public class MailService {
+    @Autowired
+    UserService userService;
+
+    public void sendMail() {
+        ZoneId zoneId = userService.zoneId;
+        System.out.println(zoneId);
+    }
+}
+
+@Aspect
+@Component
+public class LoggingAspect {
+    @Before("execution(public * com..*.UserService.*(..))")
+    public void doAccessCheck() { ...}
+}
+
+@Configuration
+@ComponentScan
+@EnableAspectJAutoProxy
+public class AppConfig {
+    public static void main(String[] args) {
+        ApplicationContext context = new AnnotationConfigApplicationContext(AppConfig.class);
+        MailService mailService = context.getBean(MailService.class);
+        System.out.println(mailService.sendMail());
+    }
+}
+// 启用AOP 报错: MailService.sendMail.System.out.println(zoneId) null
+// 因为织入了切面 注入到MailService中的UserService实例是proxy
+// public final ZoneId zoneId = ZoneId.systemDefault(); 未执行
+// 因为 proxy 的目的是代理方法 没初始化proxy的成员变量
+// Spring 通过 CGLIB 动态创建的代理类 的构造方法中 不会调用super()
+
+// 修复：不要直接访问UserService的字段 用getter
+// 注意 代理类无法覆写final方法
 ```
 
 
@@ -797,7 +869,19 @@ public class AppTest extends TestCase {
 }
 ```
 
-Spring提供的`**JdbcTemplate**`采用**Template模式**，提供了一系列以**回调**为特点的工具方法，目的是避免繁琐的`try...catch`语句
+[HSQLDB](https://hsqldb.org/)数据库，是一个用Java编写的关系数据库，可以以内存模式或者文件模式运行，本身只有一个jar包，非常适合演示代码或者测试代码
+
+```properties
+# 数据库文件名为testdb:
+jdbc.url=jdbc:hsqldb:file:testdb
+# Hsqldb默认的用户名是sa，口令是空字符串:
+jdbc.username=sa
+jdbc.password=
+```
+
+
+
+Spring提供的**`JdbcTemplate`**采用**Template模式**，提供了一系列以**回调**为特点的工具方法，目的是避免繁琐的`try...catch`语句
 
 用法：
 
@@ -898,13 +982,6 @@ Spring提供的`**JdbcTemplate**`采用**Template模式**，提供了一系列�
 
 ## 声明式事务
 
-在Spring中操作事务，没必要手写JDBC事务，可以使用Spring提供的高级接口来操作事务
-
-Spring提供的事务管理器：`PlatformTransactionManager`，负责管理所有事务
-而事务用`TransactionStatus`表示
-
-
-
 ```java
 // 手写事务
 TransactionStatus tx = null;
@@ -923,12 +1000,21 @@ try {
 }
 ```
 
+在Spring中操作事务，没必要手写JDBC事务，可以使用Spring提供的高级接口来操作事务
+
+Spring提供的事务管理器：`PlatformTransactionManager`，负责管理所有事务
+而事务用`TransactionStatus`表示
+
+
+
 之所以抽象出`PlatformTransactionManager`和`TransactionStatus`，是因为JavaEE除了提供JDBC事务外，它还支持分布式事务JTA（Java Transaction API）
 	分布式事务是指多个数据源（比如多个数据库，多个消息系统）要在分布式环境下实现事务的时候，应该怎么实现
 
 Spring为了同时支持JDBC和JTA两种事务模型，就抽象出`PlatformTransactionManager`
 
-```java
+
+
+``` java
 // 这里只需要JDBC事务
 @Configuration
 @ComponentScan
@@ -948,11 +1034,17 @@ public class AppConfig {
 public class UserService {
     // 此public方法自动具有事务支持:
     @Transactional
-    public User register(String email, String password, String name) {
-       ...
-    }
+    public User register(String email, String password, String name) { ...}
 }
 // 或者直接在Bean的class处注解@Transactional，表示所有public方法都具有事务支持
+
+// @Transactional 属性
+// readOnly 只读事务 高效
+// timeout 超时等待秒数 默认-1表示永不超时
+// propagation 设置传播行为
+// isolation 设置底层数据库的事务隔离级别
+// rollbackFor rollbackForClassName 设置需要进行回滚的异常类数组，当方法中抛出指定异常数组中的编译期异常时，则事务回滚
+// noRollbackFor noRollbackForClassName 设置不需要进行回滚的异常类数组
 ```
 
 
@@ -984,6 +1076,7 @@ public class UserService$$EnhancerBySpringCGLIB extends UserService {
 **回滚事务**
 
 默认：在一个事务方法中，如果程序判断需要回滚事务，只需抛出`RuntimeException`
+	默认情况下 Spring 不会在业务方法出现编译期异常时执行回滚操作 只会在RuntimeException回滚
 
 ```java
 @Transactional
@@ -1024,6 +1117,8 @@ public class UserService {
 
 
 **事务传播**
+
+事务传播指多个事务方法在嵌套调用时的事务控制方式
 
 现有某功能入口AController，其中调用BService的某事务方法bMethod，在bMethod内部又调用了CService的事务方法cMethod
 
@@ -1497,8 +1592,992 @@ public class UserService {
 </update>
 ```
 
-
-
-编写XML配置的优点是可以组装出动态SQL，并且把所有SQL操作集中在一起。缺点是配置起来太繁琐，调用方法时如果想查看SQL还需要定位到XML配置中。XML配置方式，参考[官方文档](https://mybatis.org/mybatis-3/zh/configuration.html)
+XML配置的优点是可以组装出动态SQL，并且把所有SQL操作集中在一起。缺点是配置起来太繁琐，调用方法时如果想查看SQL还需要定位到XML配置中。XML配置方式，参考[官方文档](https://mybatis.org/mybatis-3/zh/configuration.html)
 
 使用MyBatis最大的问题是所有SQL都需要全部手写，优点是执行的SQL就是我们自己写的SQL，对SQL进行优化非常简单，也可以编写任意复杂的SQL，或者使用数据库的特定语法，但切换数据库可能就不太容易
+
+
+
+MyBatis 缓存：
+
+一级缓存：默认开启，SqlSession级别的缓存，也称为本地缓存
+	实质上就是sqlSession级别的一个Map，与数据库同一次会话期间查询到的数据会放在本地缓存中，以后如果需要获取相同的数据，直接从缓存中拿
+
+二级缓存：需要手动开启和配置，基于namespace级别的缓存，通过MyBatis的缓存接口Cache可以自定义实现
+	一个会话查询一条数据，这个数据就会被放在当前会话的一级缓存中
+	如果会话关闭或提交，一级缓存中的数据会被保存到二级缓存中，新的会话查询信息，就可以参照二级缓存中的内容
+	不同的namespace查出的数据会放在自己对应的缓存（map）中
+
+
+
+---
+
+
+
+# Web 开发
+
+Java Web的基础：Servlet容器，以及标准的Servlet组件：
+
+- Servlet：能处理HTTP请求并将HTTP响应返回
+- JSP：一种嵌套Java代码的HTML，将被编译为Servlet
+- Filter：能过滤指定的URL以实现拦截功能
+- Listener：监听指定的事件，如ServletContext、HttpSession的创建和销毁
+
+Servlet容器为每个Web应用程序自动创建一个唯一的`ServletContext`实例，这个实例就代表了Web应用程序本身
+
+
+
+## Spring MVC
+
+创建基于Web的Maven工程
+
+引入依赖：
+
+- org.springframework:spring-context:6.0.0
+- org.springframework:spring-webmvc:6.0.0
+- org.springframework:spring-jdbc:6.0.0
+- jakarta.annotation:jakarta.annotation-api:2.1.1
+- io.pebbletemplates:pebble-spring6:3.2.0
+- ch.qos.logback:logback-core:1.4.4
+- ch.qos.logback:logback-classic:1.4.4
+- com.zaxxer:HikariCP:5.0.1
+- org.hsqldb:hsqldb:2.7.0
+
+`provided`依赖：
+
+- org.apache.tomcat.embed:tomcat-embed-core:10.1.1
+- org.apache.tomcat.embed:tomcat-embed-jasper:10.1.1
+
+```ascii art
+spring-web-mvc
+├── pom.xml
+└── src
+    └── main
+        ├── java
+        │   └── com
+        │       └── itranswarp
+        │           └── learnjava
+        │               ├── AppConfig.java
+        │               ├── DatabaseInitializer.java
+        │               ├── entity
+        │               │   └── User.java
+        │               ├── service
+        │               │   └── UserService.java
+        │               └── web
+        │                   └── UserController.java
+        ├── resources
+        │   ├── jdbc.properties
+        │   └── logback.xml
+        └── webapp
+            ├── WEB-INF
+            │   ├── templates
+            │   │   ├── _base.html
+            │   │   ├── index.html
+            │   │   ├── profile.html
+            │   │   ├── register.html
+            │   │   └── signin.html
+            │   └── web.xml
+            └── static
+                ├── css
+                │   └── bootstrap.css
+                └── js
+                    └── jquery.js
+```
+
+
+
+配置
+
+```java
+@Configuration
+@ComponentScan
+@EnableWebMvc // 启用Spring MVC
+@EnableTransactionManagement
+@PropertySource("classpath:/jdbc.properties")
+public class AppConfig {
+    ... // DataSource、JdbcTemplate、PlatformTransactionManager
+    @Bean
+    WebMvcConfigurer createWebMvcConfigurer() {
+        return new WebMvcConfigurer() {
+            @Override
+            public void addResourceHandlers(ResourceHandlerRegistry registry) {
+                // Spring MVC自动处理静态文件，并且映射路径为/static/**
+                registry.addResourceHandler("/static/**").addResourceLocations("/static/");
+            }
+        };
+    }
+    // 实例化 ViewResolver 指定 对应的模板引擎
+    @Bean
+    ViewResolver createViewResolver(@Autowired ServletContext servletContext) {
+        // 使用Pebble引擎，指定模板文件存放在/WEB-INF/templates/目录
+        var engine = new PebbleEngine.Builder().autoEscaping(true)
+                // cache:
+                .cacheActive(false)
+                // loader:
+                .loader(new Servlet5Loader(servletContext))
+                .build();
+        var viewResolver = new PebbleViewResolver(engine);
+        viewResolver.setPrefix("/WEB-INF/templates/");
+        viewResolver.setSuffix("");
+        return viewResolver;
+    }
+}
+// Controller使用@Controller标记 不能@Component
+@Controller
+public class UserController {
+    @Autowired
+    UserService userService;
+
+    @PostMapping("/signin")	// @GetMapping("...")
+    public ModelAndView doSignin(	// ModelAndView通常包含View的路径和一个Map作为Model
+            @RequestParam("email") String email,
+            @RequestParam("password") String password,
+            HttpSession session) {...}
+    ...
+}
+```
+
+Web应用中启动Spring容器有很多种方法：通过Listener启动，通过Servlet启动，使用XML配置，使用注解配置...
+这里使用最简单的：
+
+```xml
+<!-- web.xml 中配置Spring MVC提供的DispatcherServlet -->
+<?xml version="1.0"?>
+<web-app>
+    <servlet>
+        <servlet-name>dispatcher</servlet-name>
+        <servlet-class>org.springframework.web.servlet.DispatcherServlet</servlet-class>
+        <init-param>
+            <param-name>contextClass</param-name>
+            <param-value>org.springframework.web.context.support.AnnotationConfigWebApplicationContext</param-value>
+        </init-param>
+        <init-param>
+            <param-name>contextConfigLocation</param-name>
+            <param-value>com.itranswarp.learnjava.AppConfig</param-value>
+        </init-param>
+        <load-on-startup>0</load-on-startup>
+    </servlet>
+
+    <servlet-mapping>
+        <servlet-name>dispatcher</servlet-name>
+        <url-pattern>/*</url-pattern>
+    </servlet-mapping>
+</web-app>
+```
+
+有了这个配置，Servlet容器会首先初始化Spring MVC的`DispatcherServlet`，在`DispatcherServlet`启动时，它根据配置`AppConfig`创建了一个类型是`WebApplicationContext`的IoC容器，完成所有Bean的初始化，并将容器绑到`ServletContext`上
+
+`DispatcherServlet`持有IoC容器，能从IoC容器中获取所有`@Controller`的Bean，因此，`DispatcherServlet`接收到所有HTTP请求后，根据Controller方法配置的路径，就可以正确地把请求转发到指定方法，并根据返回的`ModelAndView`决定如何渲染页面
+
+```java
+// 在AppConfig中通过main()方法启动嵌入式Tomcat
+public static void main(String[] args) throws Exception {
+    Tomcat tomcat = new Tomcat();
+    tomcat.setPort(Integer.getInteger("port", 8080));
+    tomcat.getConnector();
+    Context ctx = tomcat.addWebapp("", new File("src/main/webapp").getAbsolutePath());
+    WebResourceRoot resources = new StandardRoot(ctx);
+    resources.addPreResources(
+            new DirResourceSet(resources, "/WEB-INF/classes", new File("target/classes").getAbsolutePath(), "/"));
+    ctx.setResources(resources);
+    tomcat.start();
+    tomcat.getServer().await();
+}
+```
+
+
+
+---
+
+
+
+## 使用 REST
+
+Web应用中，有一类API接口称为**REST**，通常输入输出都是JSON，便于第三方调用或者使用页面JavaScript与之交互
+
+```java
+// Spring MVC的@GetMapping和@PostMapping都支持指定输入和输出的格式
+// maven 引入依赖 com.fasterxml.jackson.core:jackson-databind:2.14.0
+// ↓ 接收JSON，输出JSON
+@PostMapping(value = "/rest",
+             consumes = "application/json;charset=UTF-8",
+             produces = "application/json;charset=UTF-8")
+@ResponseBody	// @ResponseBody表示返回的String无需额外处理，直接作为输出内容写入HttpServletResponse
+public String rest(@RequestBody User user) { // @RequestBody 输入的JSON直接被Spring反序列化为User这个JavaBean
+    return "{\"restSupport\":true}";
+}
+```
+
+使用`@RestController`代替`@Controller`，每个方法自动变成API接口方法
+
+​	在User类给某属性加上`@JsonIgnore`表示序列化为JSON时忽略该属性
+​		允写禁读`@JsonProperty(access = Access.WRITE_ONLY)`
+
+
+
+---
+
+
+
+## 集成 Filter
+
+在Spring MVC中，`DispatcherServlet`只需要固定配置到`web.xml`中，剩下的工作主要是专注于编写Controller
+
+
+
+在Spring MVC中使用Filter：
+
+直接使用Spring MVC自带的`CharacterEncodingFilter`，在全局范围类给`HttpServletRequest`和`HttpServletResponse`强制设置为UTF-8编码
+
+```xml
+<!-- web.xml -->
+<web-app>
+    <filter>
+        <filter-name>encodingFilter</filter-name>
+        <filter-class>org.springframework.web.filter.CharacterEncodingFilter</filter-class>
+        <init-param>
+            <param-name>encoding</param-name>
+            <param-value>UTF-8</param-value>
+        </init-param>
+        <init-param>
+            <param-name>forceEncoding</param-name>
+            <param-value>true</param-value>
+        </init-param>
+    </filter>
+
+    <filter-mapping>
+        <filter-name>encodingFilter</filter-name>
+        <url-pattern>/*</url-pattern>
+    </filter-mapping>
+    ...
+</web-app>
+```
+
+编写一个`AuthFilter`来在HTTP请求中添加头`Authorization: Basic email:password`
+
+```java
+@Component
+public class AuthFilter implements Filter {
+    @Autowired
+    UserService userService;
+
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
+        HttpServletRequest req = (HttpServletRequest) request;
+        // 获取Authorization头:
+        String authHeader = req.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Basic ")) {
+            // 从Header中提取email和password:
+            String email = prefixFrom(authHeader);
+            String password = suffixFrom(authHeader);
+            // 登录:
+            User user = userService.signin(email, password);
+            // 放入Session:
+            req.getSession().setAttribute(UserController.KEY_USER, user);
+        }
+        // 继续处理请求:
+        chain.doFilter(request, response);
+    }
+}
+```
+
+这时如果跟`CharacterEncodingFilter`一样，在`web.xml`中声明`AuthFilter`，那么它将不会被Spring容器初始化
+
+使用Spring MVC提供的`DelegatingFilterProxy`：让Servlet容器实例化的Filter，间接引用Spring容器实例化的`AuthFilter`
+
+```xml
+<web-app>
+    <filter>
+        <filter-name>authFilter</filter-name>
+        <filter-class>org.springframework.web.filter.DelegatingFilterProxy</filter-class>
+    </filter>
+
+    <filter-mapping>
+        <filter-name>authFilter</filter-name>
+        <url-pattern>/*</url-pattern>
+    </filter-mapping>
+    ...
+</web-app>
+```
+
+
+
+---
+
+
+
+## 使用 Interceptor
+
+Web程序中的Filter由Servlet容器管理，拦截范围包括整个处理流程：DispatcherServlet Controller ModelAndView
+
+使用Interceptor，只针对Controller方法拦截
+	好处是它本身是Spring管理的Bean，可以更简单地注入任意Bean
+
+
+
+```java
+@Order(1)
+@Component
+// Interceptor必须实现HandlerInterceptor接口，可以选择实现preHandle()、postHandle()和afterCompletion()方法
+public class LoggerInterceptor implements HandlerInterceptor {
+
+    final Logger logger = LoggerFactory.getLogger(getClass());
+
+    @Override
+    // preHandle 执行于Controller方法调用前
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        logger.info("preHandle {}...", request.getRequestURI());
+        if (request.getParameter("debug") != null) {
+            PrintWriter pw = response.getWriter();
+            pw.write("<p>DEBUG MODE</p>");
+            pw.flush();
+            return false;	// preHandle() 回false表示无需调用Controller方法继续处理
+        }
+        return true;
+    }
+
+    @Override
+    // postHandle 执行于Controller方法正常返回后 可以继续加工Controller方法返回的ModelAndView
+    public void postHandle(HttpServletRequest request, HttpServletResponse response, Object handler, ModelAndView modelAndView) throws Exception {
+        logger.info("postHandle {}.", request.getRequestURI());
+        if (modelAndView != null) {
+            modelAndView.addObject("__time__", LocalDateTime.now());
+        }
+    }
+
+    @Override
+    // afterCompletion 无论Controller方法是否抛异常都执行 ex即Controller方法抛出的异常
+    public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) throws Exception {
+        logger.info("afterCompletion {}: exception = {}", request.getRequestURI(), ex);
+    }
+}
+
+@Order(2)	// @Order指定顺序
+@Component
+public class AuthInterceptor implements HandlerInterceptor { ...}
+
+// 在WebMvcConfigurer中注册所有的Interceptor 使拦截器生效
+@Bean
+WebMvcConfigurer createWebMvcConfigurer(@Autowired HandlerInterceptor[] interceptors) {
+    return new WebMvcConfigurer() {
+        public void addInterceptors(InterceptorRegistry registry) {
+            for (var interceptor : interceptors) {
+                registry.addInterceptor(interceptor);
+            }
+        }
+        ...
+    };
+}
+```
+
+
+
+`@ExceptionHandler`：Spring MVC提供的定义异常处理方法的注解
+
+```java
+@Controller
+public class UserController {
+    @ExceptionHandler(RuntimeException.class)
+    // 异常处理方法没有固定的方法签名，可以传入Exception、HttpServletRequest等
+    // 返回值可以是void，也可以是ModelAndView
+    // 这里通过@ExceptionHandler(RuntimeException.class)表示当发生RuntimeException的时候，就自动调用此方法处理
+    public ModelAndView handleUnknowException(Exception ex) {
+        return new ModelAndView("500.html", Map.of("error", ex.getClass().getSimpleName(), "message", ex.getMessage()));
+    }
+    ...
+}
+```
+
+使用`@ExceptionHandler`定义异常处理方法的好处是：
+	如果应用程序内部发生了预料之外的异常，可以给用户显示一个出错页面，比如”哔咔被玩坏了，绝对不是哔咔的问题“，而不是简单的500 Internal Server Error或404 Not Found
+
+
+
+---
+
+
+
+## 处理 CORS
+
+跨域访问访问：A站的JavaScript访问B站API
+
+B站返回给A站返回一个正确的`Access-Control-Allow-Origin`响应头即可，决定权在API服务提供方
+
+1. **`@CrossOrigin`**
+
+```java
+// 在@RestController的class级别或方法级别定义一个@CrossOrigin
+// 指定只允许来自local.liaoxuefeng.com跨域访问
+// 允许多个 origins = {"http://a.com", "https://www.b.com"}) 数组
+// 允许所有域访问 origins = "*"
+@CrossOrigin(origins = "http://local.liaoxuefeng.com:8080")
+@RestController
+@RequestMapping("/api")
+public class ApiController { ...}
+```
+
+2. **`@CorsRegistry`**
+
+```java
+// 在WebMvcConfigurer中定义一个全局CORS配置
+@Bean
+WebMvcConfigurer createWebMvcConfigurer() {
+    return new WebMvcConfigurer() {
+        @Override
+        public void addCorsMappings(CorsRegistry registry) {
+            registry.addMapping("/api/**")
+                    .allowedOrigins("http://local.liaoxuefeng.com:8080")
+                    .allowedMethods("GET", "POST")
+                    .maxAge(3600);
+            // 可以继续添加其他URL规则:
+            // registry.addMapping("/rest/v2/**")...
+        }
+    };
+}
+```
+
+3. **`@CorsFilter`**
+
+```java
+// 使用Spring提供的CorsFilter
+// 将Spring容器内置的Bean暴露为Servlet容器的Filter需要配置web.xml
+// 太繁琐 不用
+```
+
+
+
+---
+
+
+
+## i18n
+
+- internationalization 国际化
+
+- localization 本地化 l10n
+
+- globalization 全球化 g11n
+
+对于Web应用程序，要实现国际化功能，主要是渲染View的时候，要把各种语言的资源文件提出来，这样，不同的用户访问同一个页面时，显示的语言就是不同的
+
+
+
+在Spring MVC应用程序中实现国际化：
+
+1. **获取 Local**
+
+Web应用程序中，HTTP规范规定了浏览器会在请求中携带`Accept-Language`头，用来指示用户浏览器设定的语言顺序
+
+```
+Accept-Language: zh-CN,zh;q=0.8,en;q=0.2
+```
+
+- 先选择简体中文，其次选择中文，最后选择英文
+
+- q表示权重，解析后我们可获得一个根据优先级排序的语言列表，把它转换为Java的`Locale`，即获得了用户的`Locale`
+- 大多数框架通常只返回权重最高的`Locale`
+
+Spring MVC通过`LocaleResolver`来自动从`HttpServletRequest`中获取`Locale`
+
+```java
+@Primary
+@Bean
+LocaleResolver createLocaleResolver() {
+    var clr = new CookieLocaleResolver();
+    clr.setDefaultLocale(Locale.ENGLISH);
+    clr.setDefaultTimeZone(TimeZone.getDefault());
+    return clr;
+}
+```
+
+2. **提取资源文件**
+
+把写死在模板中的字符串以资源文件的方式存储在外部
+
+​	例如`messages_zh_CN.properties`、`messages_ja_JP.properties`
+
+每个资源文件都有相同的key
+
+```properties
+## messages.properties:
+language.select=Language
+home=Home
+signin=Sign In
+copyright=Copyright©{0,number,#}
+## messages_zh_CN.properties:
+language.select=语言
+home=首页
+signin=登录
+copyright=版权所有©{0,number,#}
+```
+
+3. **创建 MessageSource**
+
+```java
+@Bean("i18n")
+MessageSource createMessageSource() {
+    // ResourceBundleMessageSource 会自动根据主文件名自动把所有相关语言的资源文件都读进来
+    var messageSource = new ResourceBundleMessageSource();
+    // 指定文件是UTF-8编码:
+    messageSource.setDefaultEncoding("UTF-8");
+    // 指定主文件名:
+    messageSource.setBasename("messages");
+    return messageSource;
+}
+```
+
+4. **实现多语言**
+
+```java
+@Component
+public class MvcInterceptor implements HandlerInterceptor {
+    @Autowired
+    LocaleResolver localeResolver;
+
+    // 注入的MessageSource 名称i18n
+    @Autowired
+    @Qualifier("i18n")
+    MessageSource messageSource;
+
+    public void postHandle(HttpServletRequest request, HttpServletResponse response, Object handler, ModelAndView modelAndView) throws Exception {
+        if (modelAndView != null // 返回了ModelAndView
+            && modelAndView.getViewName() != null // 设置了View
+            && !modelAndView.getViewName().startsWith("redirect:") // 不是重定向
+        ) {
+            // 解析用户的Locale:
+            Locale locale = localeResolver.resolveLocale(request);
+            // 放入Model:
+            modelAndView.addObject("__messageSource__", messageSource);
+            modelAndView.addObject("__locale__", locale);
+        }
+    }
+}
+```
+
+```java
+@Component
+public class MvcInterceptor implements HandlerInterceptor {
+    @Autowired
+    LocaleResolver localeResolver;
+
+    // 注意注入的MessageSource名称是i18n:
+    @Autowired
+    @Qualifier("i18n")
+    MessageSource messageSource;
+
+    public void postHandle(HttpServletRequest request, HttpServletResponse response, Object handler, ModelAndView modelAndView) throws Exception {
+        if (modelAndView != null // 返回了ModelAndView
+            && modelAndView.getViewName() != null // 设置了View
+            && !modelAndView.getViewName().startsWith("redirect:") // 不是重定向
+        ) {
+            // 解析用户的Locale
+            Locale locale = localeResolver.resolveLocale(request);
+            // 放入Model:
+            modelAndView.addObject("__messageSource__", messageSource);
+            modelAndView.addObject("__locale__", locale);
+        }
+    }
+}
+```
+
+```html
+<!-- 在View中调用MessageSource.getMessage()方法来实现多语言 -->
+<a href="/signin">{{ __messageSource__.getMessage('signin', null, __locale__) }}</a>
+```
+
+在Pebble中，我们可以封装一个国际化函数
+
+```java
+// 修改 ViewResolver 的创建
+@Bean
+ViewResolver createViewResolver(@Autowired ServletContext servletContext, @Autowired @Qualifier("i18n") MessageSource messageSource) {
+    var engine = new PebbleEngine.Builder()
+            .autoEscaping(true)
+            .cacheActive(false)
+            .loader(new Servlet5Loader(servletContext))
+            // 添加扩展:
+            .extension(createExtension(messageSource))
+            .build();
+    var viewResolver = new PebbleViewResolver();
+    viewResolver.setPrefix("/WEB-INF/templates/");
+    viewResolver.setSuffix("");
+    viewResolver.setPebbleEngine(engine);
+    return viewResolver;
+}
+
+private Extension createExtension(MessageSource messageSource) {
+    return new AbstractExtension() {
+        @Override
+        public Map<String, Function> getFunctions() {
+            return Map.of("_", new Function() {
+                public Object execute(Map<String, Object> args, PebbleTemplate self, EvaluationContext context, int lineNumber) {
+                    String key = (String) args.get("0");
+                    List<Object> arguments = this.extractArguments(args);
+                    Locale locale = (Locale) context.getVariable("__locale__");
+                    return messageSource.getMessage(key, arguments.toArray(), "???" + key + "???", locale);
+                }
+                private List<Object> extractArguments(Map<String, Object> args) {
+                    int i = 1;
+                    List<Object> arguments = new ArrayList<>();
+                    while (args.containsKey(String.valueOf(i))) {
+                        Object param = args.get(String.valueOf(i));
+                        arguments.add(param);
+                        i++;
+                    }
+                    return arguments;
+                }
+                public List<String> getArgumentNames() {
+                    return null;
+                }
+            });
+        }
+    };
+}
+```
+
+多语言页面改为
+
+```html
+<a href="/signin">{{ _('signin') }}</a>
+```
+
+5. **实现切换 Local**
+
+```java
+@Controller
+public class LocaleController {
+    final Logger logger = LoggerFactory.getLogger(getClass());
+
+    @Autowired
+    LocaleResolver localeResolver;
+
+    @GetMapping("/locale/{lo}")
+    public String setLocale(@PathVariable("lo") String lo, HttpServletRequest request, HttpServletResponse response) {
+        // 根据传入的lo创建Locale实例:
+        Locale locale = null;
+        int pos = lo.indexOf('_');
+        if (pos > 0) {
+            String lang = lo.substring(0, pos);
+            String country = lo.substring(pos + 1);
+            locale = new Locale(lang, country);
+        } else {
+            locale = new Locale(lo);
+        }
+        // 设定此Locale:
+        localeResolver.setLocale(request, response, locale);
+        logger.info("locale is set to {}.", locale);
+        // 刷新页面:
+        String referer = request.getHeader("Referer");
+        return "redirect:" + (referer == null ? "/" : referer);
+    }
+}
+```
+
+
+
+---
+
+
+
+## 异步处理
+
+Servlet模型中，每个请求都是由某个线程处理，然后，将响应写入IO流，发送给客户端
+
+如果一个请求处理的时间较长，例如几秒钟甚至更长，那么，这种基于线程池的同步模型很快就会把所有线程耗尽，导致服务器无法响应新的请求
+如果把长时间处理的请求改为异步处理，那么线程池的利用率就会大大提高
+Servlet从3.0规范开始添加了异步支持，允许对一个请求进行异步处理
+
+
+
+```xml
+<!-- web.xml -->
+<web-app>
+    <display-name>Archetype Created Web Application</display-name>
+
+    <servlet>
+        <servlet-name>dispatcher</servlet-name>
+        <servlet-class>org.springframework.web.servlet.DispatcherServlet</servlet-class>
+        <init-param>
+            <param-name>contextClass</param-name>
+            <param-value>org.springframework.web.context.support.AnnotationConfigWebApplicationContext</param-value>
+        </init-param>
+        <init-param>
+            <param-name>contextConfigLocation</param-name>
+            <param-value>com.itranswarp.learnjava.AppConfig</param-value>
+        </init-param>
+        <load-on-startup>0</load-on-startup>
+        <!-- true -> Servlet容器支持async处理 -->
+        <async-supported>true</async-supported>
+    </servlet>
+
+    <servlet-mapping>
+        <servlet-name>dispatcher</servlet-name>
+        <url-pattern>/*</url-pattern>
+    </servlet-mapping>
+</web-app>
+```
+
+Controller 中 async 处理逻辑：
+
+1. ```java
+   // 返回一个Callable，Spring MVC自动把返回的Callable放入线程池执行，等待结果返回后再写入响应
+   @GetMapping("/users")
+   public Callable<List<User>> users() {
+       return () -> {
+           // 模拟3秒耗时:
+           try {
+               Thread.sleep(3000);
+           } catch (InterruptedException e) {}
+           return userService.getUsers();
+       };
+   }
+   ```
+
+2. ```java
+   // 返回一个DeferredResult对象，然后在另一个线程中，设置此对象的值并写入响应
+   @GetMapping("/users/{id}")
+   public DeferredResult<User> user(@PathVariable("id") long id) {
+       DeferredResult<User> result = new DeferredResult<>(3000L); // 3秒超时
+       new Thread(() -> {
+           // 等待1秒:
+           try {
+               Thread.sleep(1000);
+           } catch (InterruptedException e) {}
+           try {
+               User user = userService.getUserById(id);
+               // 设置正常结果并由Spring MVC写入Response:
+               result.setResult(user);
+           } catch (Exception e) {
+               // 设置错误结果并由Spring MVC写入Response:
+               result.setErrorResult(Map.of("error", e.getClass().getSimpleName(), "message", e.getMessage()));
+           }
+       }).start();
+       return result;
+   }
+   ```
+
+
+
+**async Filter**：
+
+```xml
+<!-- web.xml -->
+<web-app ...>
+    ...
+    <filter>
+        <filter-name>sync-filter</filter-name>
+        <filter-class>com.itranswarp.learnjava.web.SyncFilter</filter-class>
+    </filter>
+
+    <filter>
+        <filter-name>async-filter</filter-name>
+        <filter-class>com.itranswarp.learnjava.web.AsyncFilter</filter-class>
+        <!-- 支持<async-supported>的Filter既可以过滤async处理请求，也可以过滤正常的同步处理请求 -->
+        <!-- 普通Filter 遇到async请求 直接报错 -->
+        <async-supported>true</async-supported>
+    </filter>
+
+    <filter-mapping>
+        <filter-name>sync-filter</filter-name>
+        <url-pattern>/api/version</url-pattern>
+    </filter-mapping>
+
+    <filter-mapping>
+        <filter-name>async-filter</filter-name>
+        <url-pattern>/api/*</url-pattern>
+    </filter-mapping>
+    ...
+</web-app>
+```
+
+
+
+Servlet 3.0规范添加的异步支持效率不高
+
+Java标准库提供了封装操作系统的异步IO包`java.nio`高效但复杂
+
+大部分需要高性能异步IO的应用程序会选择[Netty](https://netty.io/)这样的框架，它基于NIO提供了更易于使用的API，方便开发异步应用程序
+
+
+
+---
+
+
+
+## WebSocket
+
+WebSocket是一种基于HTTP的长链接技术
+
+建立TCP连接后，浏览器请求附带：
+
+```plain
+GET /chat HTTP/1.1
+Host: www.example.com
+Upgrade: websocket
+Connection: Upgrade
+```
+
+表示客户端希望升级连接，变成长连接的WebSocket，服务器返回升级成功的响应：
+
+```plain
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+```
+
+收到成功响应后表示WebSocket“握手”成功，如此，代表WebSocket的这个TCP连接将不会被服务器关闭，，而是一直保持，服务器可随时向浏览器推送消息，浏览器也可随时向服务器推送消息
+
+
+
+在Spring MVC中实现对WebSocket的支持：
+
+1. maven引入依赖：
+
+- org.apache.tomcat.embed:tomcat-embed-websocket:10.1.1	嵌入式Tomcat支持WebSocket的组件
+- org.springframework:spring-websocket:6.0.0	Spring封装的支持WebSocket的接口
+
+2. 配置 AppConfig：
+
+```java
+@Configuration
+@ComponentScan
+@EnableWebMvc
+@EnableWebSocket // 启用WebSocket支持
+public class AppConfig {
+    @Bean
+    // 这个Bean在内部通过WebSocketHandlerRegistry注册能处理WebSocket的WebSocketHandler，以及可选的WebSocket拦截器HandshakeInterceptor
+    WebSocketConfigurer createWebSocketConfigurer(
+            @Autowired ChatHandler chatHandler,
+            @Autowired ChatHandshakeInterceptor chatInterceptor)
+    {
+        return new WebSocketConfigurer() {
+            public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
+                // 把URL与指定的WebSocketHandler关联，可关联多个:
+                registry.addHandler(chatHandler, "/chat").addInterceptors(chatInterceptor);
+            }
+        };
+    }
+    ...
+}
+```
+
+3. 处理WebSocket连接
+
+和处理普通HTTP请求不同，没法用一个方法处理一个URL
+
+Spring提供了`TextWebSocketHandler`和`BinaryWebSocketHandler`分别处理文本消息和二进制消息，这里我们选择文本消息作为聊天室的协议，因此，`ChatHandler`需要继承自`TextWebSocketHandler`：
+
+```java
+@Component
+public class ChatHandler extends TextWebSocketHandler { ...}
+```
+
+当浏览器请求一个WebSocket连接后，如果成功建立连接，Spring会自动调用`afterConnectionEstablished()`方法，任何原因导致WebSocket连接中断时，Spring会自动调用`afterConnectionClosed`方法，因此，覆写这两个方法即可处理连接成功和结束后的业务逻辑：
+
+```java
+@Component
+public class ChatHandler extends TextWebSocketHandler {
+    // 保存所有Client的WebSocket会话实例:
+    private Map<String, WebSocketSession> clients = new ConcurrentHashMap<>();
+    @Override
+    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        // 新会话根据ID放入Map:
+        clients.put(session.getId(), session);
+        session.getAttributes().put("name", "Guest1");
+    }
+    @Override
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
+        clients.remove(session.getId());
+    }
+}
+```
+
+每个WebSocket会话以`WebSocketSession`表示，且已分配唯一ID。和WebSocket相关的数据，例如用户名称等，均可放入关联的`getAttributes()`中
+
+用实例变量`clients`持有当前所有的`WebSocketSession`是为了广播，即向所有用户推送同一消息时：
+
+```java
+String json = ...
+TextMessage message = new TextMessage(json);
+for (String id : clients.keySet()) {
+    WebSocketSession session = clients.get(id);
+    session.sendMessage(message);
+}
+```
+
+我们发送的消息是序列化后的JSON，可以用`ChatMessage`表示：
+
+```java
+public class ChatMessage {
+	public long timestamp;
+	public String name;
+    public String text;
+}
+```
+
+每收到一个用户的消息后，我们就需要广播给所有用户：
+
+```java
+@Component
+public class ChatHandler extends TextWebSocketHandler {
+    ...
+    @Override
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        String s = message.getPayload();
+        String r = ... // 根据输入消息构造待发送消息
+        broadcastMessage(r); // 推送给所有用户
+    }
+}
+```
+
+如果要推送给指定的几个用户，那就需要在`clients`中根据条件查找出某些`WebSocketSession`，然后发送消息。
+
+注意到我们在注册WebSocket时还传入了一个`ChatHandshakeInterceptor`，这个类实际上可以从`HttpSessionHandshakeInterceptor`继承，它的主要作用是在WebSocket建立连接后，把HttpSession的一些属性复制到WebSocketSession，例如，用户的登录信息等：
+
+```java
+@Component
+public class ChatHandshakeInterceptor extends HttpSessionHandshakeInterceptor {
+    public ChatHandshakeInterceptor() {
+        // 指定从HttpSession复制属性到WebSocketSession:
+        super(List.of(UserController.KEY_USER));
+    }
+}
+```
+
+这样，在`ChatHandler`中，可以从`WebSocketSession.getAttributes()`中获取到复制过来的属性
+
+4. 客户端开发
+
+在完成了服务器端的开发后，我们还需要在页面编写一点JavaScript逻辑：
+
+```javascript
+// 创建WebSocket连接:
+var ws = new WebSocket('ws://' + location.host + '/chat');
+// 连接成功时:
+ws.addEventListener('open', function (event) {
+    console.log('websocket connected.');
+});
+// 收到消息时:
+ws.addEventListener('message', function (event) {
+    console.log('message: ' + event.data);
+    var msgs = JSON.parse(event.data);
+    // TODO:
+});
+// 连接关闭时:
+ws.addEventListener('close', function () {
+    console.log('websocket closed.');
+});
+// 绑定到全局变量:
+window.chatWs = ws;
+```
+
+用户可以在连接成功后任何时候给服务器发送消息：
+
+```javascript
+var inputText = 'Hello, WebSocket.';
+window.chatWs.send(JSON.stringify({text: inputText}));
+```
+
+最后，连调浏览器和服务器端，如果一切无误，可以开多个不同的浏览器测试WebSocket的推送和广播。
+
+和上一节我们介绍的异步处理类似，Servlet的线程模型并不适合大规模的长链接。基于NIO的Netty等框架更适合处理WebSocket长链接，我们将在后面介绍。
